@@ -11,6 +11,7 @@ public class SimpleBusController : MonoBehaviour
     public float coastDrag = 0.985f;
     public float wheelMotorTorque = 8200f;
     public float wheelBrakeTorque = 5200f;
+    public float idleBrakeTorque = 1400f;
     public float wheelSteerAngle = 6.5f;
     public float highSpeedWheelSteerAngle = 2.2f;
     public float straightLineAssist = 8f;
@@ -21,6 +22,7 @@ public class SimpleBusController : MonoBehaviour
     public float yawStability = 3f;
     public float hillAssistTorque = 2600f;
     public float hillAssistSpeedThreshold = 24f;
+    public float hillMaxSpeedKmh = 55f;
     public int currentGear = 0;
     public string gearText = "N";
 
@@ -113,6 +115,12 @@ public class SimpleBusController : MonoBehaviour
         float motorTorque = brakeTorque > 0f ? 0f : throttle * wheelMotorTorque;
         float speedKmh = rb.velocity.magnitude * 3.6f;
 
+        if (brakeTorque <= 0f && Mathf.Abs(throttle) < 0.01f && speedKmh < 1.5f)
+        {
+            // Prevent slow creeping/rolling when the player is not giving input.
+            brakeTorque = idleBrakeTorque;
+        }
+
         if (throttle > 0f && speedKmh < 25f)
         {
             motorTorque *= 1.35f;
@@ -139,11 +147,18 @@ public class SimpleBusController : MonoBehaviour
 
     private void ApplySmoothSpeedLimit()
     {
+        float maxForward = maxForwardSpeed;
+        float uphillAlignment = Mathf.Max(0f, Vector3.Dot(transform.forward.normalized, Vector3.up));
+        if (uphillAlignment > 0.10f)
+        {
+            maxForward = Mathf.Min(maxForward, hillMaxSpeedKmh / 3.6f);
+        }
+
         Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
 
-        if (localVelocity.z > maxForwardSpeed)
+        if (localVelocity.z > maxForward)
         {
-            localVelocity.z = Mathf.Lerp(localVelocity.z, maxForwardSpeed, 4f * Time.fixedDeltaTime);
+            localVelocity.z = Mathf.Lerp(localVelocity.z, maxForward, 4f * Time.fixedDeltaTime);
         }
         else if (localVelocity.z < -maxReverseSpeed)
         {
