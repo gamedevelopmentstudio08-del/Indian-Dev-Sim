@@ -1878,7 +1878,7 @@ public class GameBootstrap : MonoBehaviour
         rail.transform.rotation = rotation;
         rail.transform.localScale = new Vector3(0.22f, 0.22f, length + 0.4f);
         rail.GetComponent<Renderer>().material.color = new Color(0.78f, 0.8f, 0.84f);
-        RemoveCollider(rail);
+        ConfigureBarrierCollider(rail);
     }
 
     private void CreateBridgeSupport(Vector3 bridgePoint, Vector3 forward)
@@ -2481,7 +2481,27 @@ public class GameBootstrap : MonoBehaviour
         beam.transform.rotation = rotation;
         beam.transform.localScale = new Vector3(0.16f, 0.18f, length + 0.25f);
         beam.GetComponent<Renderer>().material.color = new Color(0.74f, 0.78f, 0.82f);
-        RemoveCollider(beam);
+        ConfigureBarrierCollider(beam);
+    }
+
+    private void ConfigureBarrierCollider(GameObject barrier)
+    {
+        if (barrier == null)
+        {
+            return;
+        }
+
+        BoxCollider box = barrier.GetComponent<BoxCollider>();
+        if (box == null)
+        {
+            return;
+        }
+
+        box.isTrigger = false;
+        if (roadPhysicsMaterial != null)
+        {
+            box.sharedMaterial = roadPhysicsMaterial;
+        }
     }
 
     private void CreateMountainRoadTrees(Vector3 start, Vector3 end)
