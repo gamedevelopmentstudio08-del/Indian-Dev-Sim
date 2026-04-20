@@ -21,55 +21,110 @@ public class DemoVehicleMover : MonoBehaviour
     private const float YellowDuration = 3f;
     private const float RedDuration = 12f;
 
+    private Rigidbody rb;
+    private Vector3 nextPosition;
+    private Quaternion nextRotation;
+
     private void Start()
     {
+        rb = GetComponent<Rigidbody>();
+
         if (moveOnXAxis)
         {
             float spawnX = moveDirection > 0 ? startX : endX;
-            transform.position = new Vector3(spawnX, transform.position.y, laneZ);
-            transform.rotation = Quaternion.Euler(0f, moveDirection > 0 ? 90f : -90f, 0f);
+            nextPosition = new Vector3(spawnX, transform.position.y, laneZ);
+            nextRotation = Quaternion.Euler(0f, moveDirection > 0 ? 90f : -90f, 0f);
         }
         else
         {
             float spawnZ = moveDirection > 0 ? startZ : endZ;
-            transform.position = new Vector3(laneX, transform.position.y, spawnZ);
-            transform.rotation = Quaternion.Euler(0f, moveDirection > 0 ? 0f : 180f, 0f);
+            nextPosition = new Vector3(laneX, transform.position.y, spawnZ);
+            nextRotation = Quaternion.Euler(0f, moveDirection > 0 ? 0f : 180f, 0f);
+        }
+
+        if (rb != null)
+        {
+            rb.isKinematic = true;
+            rb.useGravity = false;
+            rb.interpolation = RigidbodyInterpolation.Interpolate;
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+            rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+            rb.position = nextPosition;
+            rb.rotation = nextRotation;
+        }
+        else
+        {
+            transform.position = nextPosition;
+            transform.rotation = nextRotation;
         }
     }
 
     private void Update()
     {
+        if (rb == null)
+        {
+            MoveVehicle(Time.deltaTime);
+        }
+    }
+
+    private void FixedUpdate()
+    {
+        if (rb != null)
+        {
+            MoveVehicle(Time.fixedDeltaTime);
+        }
+    }
+
+    private void MoveVehicle(float deltaTime)
+    {
+        Vector3 currentPosition = rb != null ? rb.position : transform.position;
+        Quaternion currentRotation = rb != null ? rb.rotation : transform.rotation;
+
         if (moveOnXAxis)
         {
             if (!ShouldStopForTrafficLight())
             {
-                transform.position += Vector3.right * moveDirection * speed * Time.deltaTime;
+                currentPosition += Vector3.right * moveDirection * speed * deltaTime;
             }
 
-            if (moveDirection > 0 && transform.position.x > endX)
+            if (moveDirection > 0 && currentPosition.x > endX)
             {
-                transform.position = new Vector3(startX, transform.position.y, laneZ);
+                currentPosition = new Vector3(startX, currentPosition.y, laneZ);
             }
-            else if (moveDirection < 0 && transform.position.x < startX)
+            else if (moveDirection < 0 && currentPosition.x < startX)
             {
-                transform.position = new Vector3(endX, transform.position.y, laneZ);
+                currentPosition = new Vector3(endX, currentPosition.y, laneZ);
             }
         }
         else
         {
             if (!ShouldStopForTrafficLight())
             {
-                transform.position += Vector3.forward * moveDirection * speed * Time.deltaTime;
+                currentPosition += Vector3.forward * moveDirection * speed * deltaTime;
             }
 
-            if (moveDirection > 0 && transform.position.z > endZ)
+            if (moveDirection > 0 && currentPosition.z > endZ)
             {
-                transform.position = new Vector3(laneX, transform.position.y, startZ);
+                currentPosition = new Vector3(laneX, currentPosition.y, startZ);
             }
-            else if (moveDirection < 0 && transform.position.z < startZ)
+            else if (moveDirection < 0 && currentPosition.z < startZ)
             {
-                transform.position = new Vector3(laneX, transform.position.y, endZ);
+                currentPosition = new Vector3(laneX, currentPosition.y, endZ);
             }
+        }
+
+        nextPosition = currentPosition;
+        nextRotation = currentRotation;
+
+        if (rb != null)
+        {
+            rb.MovePosition(nextPosition);
+            rb.MoveRotation(nextRotation);
+        }
+        else
+        {
+            transform.position = nextPosition;
+            transform.rotation = nextRotation;
         }
     }
 
@@ -90,10 +145,12 @@ public class DemoVehicleMover : MonoBehaviour
 
     private bool ShouldStopOnZAxis()
     {
+        Vector3 position = rb != null ? rb.position : transform.position;
+
         foreach (float intersectionZ in mainRoadIntersections)
         {
             float stopLineZ = intersectionZ - stopLineOffset * moveDirection;
-            float distanceToStopLine = (stopLineZ - transform.position.z) * moveDirection;
+            float distanceToStopLine = (stopLineZ - position.z) * moveDirection;
 
             if (distanceToStopLine > 0f && distanceToStopLine < stopDistance)
             {
@@ -106,10 +163,12 @@ public class DemoVehicleMover : MonoBehaviour
 
     private bool ShouldStopOnXAxis()
     {
+        Vector3 position = rb != null ? rb.position : transform.position;
+
         foreach (float intersectionX in crossRoadIntersections)
         {
             float stopLineX = intersectionX - stopLineOffset * moveDirection;
-            float distanceToStopLine = (stopLineX - transform.position.x) * moveDirection;
+            float distanceToStopLine = (stopLineX - position.x) * moveDirection;
 
             if (distanceToStopLine > 0f && distanceToStopLine < stopDistance)
             {
