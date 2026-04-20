@@ -30,12 +30,15 @@ public class SimpleBusController : MonoBehaviour
     public float hillMaxSpeedKmh = 55f;
     public int currentGear = 0;
     public string gearText = "N";
+    public float CurrentSpeedKmh => Mathf.Abs(currentForwardSpeed) * 3.6f;
 
     private Rigidbody rb;
     private WheelCollider[] wheelColliders;
     private float throttle;
     private float steering;
     private float steerInput;
+    private float currentForwardSpeed;
+    private float currentYaw;
     private Vector3 spawnPosition;
     private Quaternion spawnRotation;
 
@@ -53,6 +56,7 @@ public class SimpleBusController : MonoBehaviour
         wheelColliders = GetComponentsInChildren<WheelCollider>();
         spawnPosition = transform.position;
         spawnRotation = transform.rotation;
+        currentYaw = transform.eulerAngles.y;
 
         foreach (WheelCollider wheel in wheelColliders)
         {
@@ -81,6 +85,8 @@ public class SimpleBusController : MonoBehaviour
     {
         if (useWheelColliderDrive && wheelColliders != null && wheelColliders.Length >= 4)
         {
+            rb.isKinematic = false;
+            rb.useGravity = true;
             float steerRate = Mathf.Abs(steerInput) > 0.01f ? steeringResponse : steeringReturnSpeed;
             steering = Mathf.MoveTowards(steering, steerInput, steerRate * Time.fixedDeltaTime);
             DriveWithWheelColliders();
@@ -90,6 +96,8 @@ public class SimpleBusController : MonoBehaviour
             return;
         }
 
+        rb.isKinematic = true;
+        rb.useGravity = false;
         DriveArcade();
         UpdateGear();
     }
@@ -97,7 +105,6 @@ public class SimpleBusController : MonoBehaviour
     private void DriveArcade()
     {
         float speedLimit = hardMaxSpeedKmh / 3.6f;
-        Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
         float desiredForwardSpeed = 0f;
         float acceleration = brakingForce;
 
@@ -117,25 +124,29 @@ public class SimpleBusController : MonoBehaviour
             acceleration = reverseSpeed;
         }
 
-        localVelocity.z = Mathf.MoveTowards(
-            localVelocity.z,
+        currentForwardSpeed = Mathf.MoveTowards(
+            currentForwardSpeed,
             desiredForwardSpeed,
             acceleration * Time.fixedDeltaTime
         );
-        localVelocity.z = Mathf.Clamp(localVelocity.z, -speedLimit, speedLimit);
-        localVelocity.x = Mathf.Lerp(localVelocity.x, 0f, 12f * Time.fixedDeltaTime);
-        rb.velocity = transform.TransformDirection(localVelocity);
 
-        float speedRatio = Mathf.Clamp01(Mathf.Abs(localVelocity.z) / maxForwardSpeed);
-        float steerMultiplier = Mathf.Lerp(1f, 0.35f, speedRatio);
-        float turn = steerInput * rotationSpeed * steerMultiplier * Time.fixedDeltaTime;
-
-        if (Mathf.Abs(steerInput) > 0.01f)
+        currentForwardSpeed = Mathf.Clamp(currentForwardSpeed, -speedLimit, speedLimit);
+        if (throttle == 0f && !Input.GetKey(KeyCode.Space))
         {
-            rb.MoveRotation(rb.rotation * Quaternion.Euler(0f, turn, 0f));
+            currentForwardSpeed = Mathf.MoveTowards(currentForwardSpeed, 0f, brakingForce * 0.5f * Time.fixedDeltaTime);
         }
 
-        rb.angularVelocity = Vector3.Lerp(rb.angularVelocity, Vector3.zero, 14f * Time.fixedDeltaTime);
+        float speedRatio = Mathf.Clamp01(Mathf.Abs(currentForwardSpeed) / maxForwardSpeed);
+        float steerMultiplier = Mathf.Lerp(1f, 0.30f, speedRatio);
+        float turn = steerInput * rotationSpeed * steerMultiplier * Time.fixedDeltaTime;
+        currentYaw += turn;
+
+        Vector3 moveStep = Quaternion.Euler(0f, currentYaw, 0f) * Vector3.forward * (currentForwardSpeed * Time.fixedDeltaTime);
+        rb.MovePosition(rb.position + moveStep);
+        rb.MoveRotation(Quaternion.Euler(0f, currentYaw, 0f));
+
+        rb.velocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
     }
 
     private void DriveWithWheelColliders()
@@ -271,7 +282,7 @@ public class SimpleBusController : MonoBehaviour
 
     private void ApplyHighSpeedProtection()
     {
-        float forwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
+        float forwardSpeed = currentForwardSpeed;
         float speedKmh = Mathf.Abs(forwardSpeed) * 3.6f;
         if (speedKmh <= overSpeedBrakeKmh)
         {
@@ -280,15 +291,13 @@ public class SimpleBusController : MonoBehaviour
 
         if (speedKmh > hardMaxSpeedKmh)
         {
-            rb.velocity = transform.forward * Mathf.Sign(forwardSpeed) * (hardMaxSpeedKmh / 3.6f);
-            rb.angularVelocity *= 0.45f;
+            currentForwardSpeed = Mathf.Sign(forwardSpeed) * (hardMaxSpeedKmh / 3.6f);
             return;
         }
 
         float overspeedRatio = Mathf.InverseLerp(overSpeedBrakeKmh, hardMaxSpeedKmh, speedKmh);
-        Vector3 targetVelocity = transform.forward * Mathf.Sign(forwardSpeed) * (hardMaxSpeedKmh / 3.6f);
-        rb.velocity = Vector3.Lerp(rb.velocity, targetVelocity, overspeedRatio * Time.fixedDeltaTime * 5f);
-        rb.angularVelocity *= Mathf.Lerp(1f, 0.72f, overspeedRatio);
+        float targetSpeed = Mathf.Sign(forwardSpeed) * (hardMaxSpeedKmh / 3.6f);
+        currentForwardSpeed = Mathf.Lerp(currentForwardSpeed, targetSpeed, overspeedRatio * Time.fixedDeltaTime * 5f);
     }
 
     private float GetHillAssistMultiplier()
@@ -306,8 +315,8 @@ public class SimpleBusController : MonoBehaviour
 
     private void UpdateGear()
     {
-        float forwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
-        float speedKmh = rb.velocity.magnitude * 3.6f;
+        float forwardSpeed = currentForwardSpeed;
+        float speedKmh = CurrentSpeedKmh;
 
         if (forwardSpeed < -0.8f)
         {
@@ -351,6 +360,8 @@ public class SimpleBusController : MonoBehaviour
         rb.velocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
         transform.SetPositionAndRotation(spawnPosition, spawnRotation);
+        currentForwardSpeed = 0f;
+        currentYaw = spawnRotation.eulerAngles.y;
         steering = 0f;
         throttle = 0f;
         steerInput = 0f;
@@ -370,10 +381,10 @@ public class SimpleBusController : MonoBehaviour
             return;
         }
 
-        rb.velocity *= 0.74f;
-        rb.angularVelocity *= 0.65f;
         if (useWheelColliderDrive)
         {
+            rb.velocity *= 0.74f;
+            rb.angularVelocity *= 0.65f;
             rb.AddForce(impulseDirection * impactStrength * 1.4f, ForceMode.VelocityChange);
         }
     }

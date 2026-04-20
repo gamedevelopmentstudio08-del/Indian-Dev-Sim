@@ -138,8 +138,7 @@ public class GameBootstrap : MonoBehaviour
             return;
         }
 
-        Rigidbody rb = bus.GetComponent<Rigidbody>();
-        int speedKmh = Mathf.RoundToInt(rb.velocity.magnitude * 3.6f);
+        int speedKmh = Mathf.RoundToInt(bus.CurrentSpeedKmh);
         hudMessage =
             "Speed: " + speedKmh + " km/h\n" +
             "Gear: " + bus.gearText + "\n" +
