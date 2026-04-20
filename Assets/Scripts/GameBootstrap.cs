@@ -124,7 +124,7 @@ public class GameBootstrap : MonoBehaviour
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.F5))
+        if (IsKeyDown(KeyCode.F5))
         {
             ReloadGame();
             return;
@@ -153,6 +153,30 @@ public class GameBootstrap : MonoBehaviour
     {
         Scene currentScene = SceneManager.GetActiveScene();
         SceneManager.LoadScene(currentScene.buildIndex);
+    }
+
+    private static bool IsKeyDown(KeyCode key)
+    {
+        if (Input.GetKeyDown(key))
+        {
+            return true;
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard == null)
+        {
+            return false;
+        }
+
+        switch (key)
+        {
+            case KeyCode.F5: return keyboard.f5Key.wasPressedThisFrame;
+            default: return false;
+        }
+#else
+        return false;
+#endif
     }
 
     private void BuildScene()
@@ -221,8 +245,8 @@ public class GameBootstrap : MonoBehaviour
         main.maxParticles = 1800;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
         main.startColor = new ParticleSystem.MinMaxGradient(
-            new Color(1f, 0.60f, 0.76f, 0.85f),
-            new Color(1f, 0.82f, 0.90f, 0.78f)
+            new Color(1f, 0.42f, 0.66f, 0.92f),
+            new Color(1f, 0.72f, 0.84f, 0.86f)
         );
 
         ParticleSystem.EmissionModule emission = rainSystem.emission;
@@ -241,7 +265,7 @@ public class GameBootstrap : MonoBehaviour
         renderer.renderMode = ParticleSystemRenderMode.Stretch;
         renderer.lengthScale = 2.4f;
         renderer.velocityScale = 0.12f;
-        renderer.material.color = new Color(1f, 0.66f, 0.82f, 0.82f);
+        renderer.material.color = new Color(1f, 0.48f, 0.70f, 0.90f);
 
         CreateWeatherAudioSystem(cam);
 
@@ -579,8 +603,8 @@ public class GameBootstrap : MonoBehaviour
                 settings.wetness = 0.78f;
                 settings.label = (isNight ? "Night" : "Day") + " / Rain";
                 settings.lightIntensity *= 0.62f;
-                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.36f, 0.38f, 0.50f), 0.72f);
-                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.28f, 0.24f, 0.34f), 0.72f);
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.42f, 0.34f, 0.48f), 0.74f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.34f, 0.18f, 0.30f), 0.76f);
                 settings.fogDensity *= 2.6f;
                 break;
             case WeatherCondition.Thunderstorm:
@@ -590,8 +614,8 @@ public class GameBootstrap : MonoBehaviour
                 settings.wetness = 1f;
                 settings.label = "Thunderstorm" + (isNight ? " / Night" : " / Day");
                 settings.lightIntensity *= 0.28f;
-                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.03f, 0.04f, 0.08f), isNight ? 0.9f : 0.75f);
-                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.03f, 0.03f, 0.05f), 0.85f);
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.08f, 0.03f, 0.06f), isNight ? 0.9f : 0.75f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.12f, 0.04f, 0.08f), 0.85f);
                 settings.fogDensity *= 3.8f;
                 break;
         }

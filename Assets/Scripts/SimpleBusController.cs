@@ -8,6 +8,7 @@ public class SimpleBusController : MonoBehaviour
     public float maxReverseSpeed = 8f;
     public float hardMaxSpeedKmh = 200f;
     public float overSpeedBrakeKmh = 185f;
+    public bool useWheelColliderDrive = false;
     public float rotationSpeed = 20f;
     public float brakingForce = 10f;
     public float coastDrag = 0.985f;
@@ -64,12 +65,12 @@ public class SimpleBusController : MonoBehaviour
         throttle = 0f;
         steerInput = 0f;
 
-        if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) throttle = 1f;
-        if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow)) throttle = -1f;
-        if (Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow)) steerInput = -1f;
-        if (Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow)) steerInput = 1f;
+        if (IsKeyHeld(KeyCode.W) || IsKeyHeld(KeyCode.UpArrow)) throttle = 1f;
+        if (IsKeyHeld(KeyCode.S) || IsKeyHeld(KeyCode.DownArrow)) throttle = -1f;
+        if (IsKeyHeld(KeyCode.A) || IsKeyHeld(KeyCode.LeftArrow)) steerInput = -1f;
+        if (IsKeyHeld(KeyCode.D) || IsKeyHeld(KeyCode.RightArrow)) steerInput = 1f;
 
-        if (Input.GetKeyDown(KeyCode.R))
+        if (IsKeyDown(KeyCode.R))
         {
             ReloadBus();
         }
@@ -80,7 +81,7 @@ public class SimpleBusController : MonoBehaviour
         float steerRate = Mathf.Abs(steerInput) > 0.01f ? steeringResponse : steeringReturnSpeed;
         steering = Mathf.MoveTowards(steering, steerInput, steerRate * Time.fixedDeltaTime);
 
-        if (wheelColliders != null && wheelColliders.Length >= 4)
+        if (useWheelColliderDrive && wheelColliders != null && wheelColliders.Length >= 4)
         {
             DriveWithWheelColliders();
             ApplyLowSpeedSteeringAssist();
@@ -89,11 +90,16 @@ public class SimpleBusController : MonoBehaviour
             return;
         }
 
+        DriveArcade();
+        UpdateGear();
+    }
+
+    private void DriveArcade()
+    {
         if (Input.GetKey(KeyCode.Space))
         {
             rb.velocity = Vector3.Lerp(rb.velocity, Vector3.zero, brakingForce * Time.fixedDeltaTime);
             rb.angularVelocity = Vector3.Lerp(rb.angularVelocity, Vector3.zero, brakingForce * Time.fixedDeltaTime);
-            UpdateGear();
             return;
         }
 
@@ -113,9 +119,12 @@ public class SimpleBusController : MonoBehaviour
         ApplyHighSpeedProtection();
 
         float movingAmount = Mathf.Clamp01(rb.velocity.magnitude / 2f);
-        float turn = steering * rotationSpeed * movingAmount * Time.fixedDeltaTime;
-        rb.MoveRotation(rb.rotation * Quaternion.Euler(0f, turn, 0f));
-        UpdateGear();
+        float turn = steerInput * rotationSpeed * movingAmount * Time.fixedDeltaTime;
+
+        if (Mathf.Abs(steerInput) > 0.01f)
+        {
+            rb.MoveRotation(rb.rotation * Quaternion.Euler(0f, turn, 0f));
+        }
     }
 
     private void DriveWithWheelColliders()
@@ -274,13 +283,15 @@ public class SimpleBusController : MonoBehaviour
 
         if (speedKmh > hardMaxSpeedKmh)
         {
-            rb.velocity = rb.velocity.normalized * (hardMaxSpeedKmh / 3.6f);
+            Vector3 direction = rb.velocity.sqrMagnitude > 0.001f ? rb.velocity.normalized : transform.forward;
+            rb.velocity = direction * (hardMaxSpeedKmh / 3.6f);
             rb.angularVelocity *= 0.45f;
             return;
         }
 
         float overspeedRatio = Mathf.InverseLerp(overSpeedBrakeKmh, hardMaxSpeedKmh, speedKmh);
-        rb.velocity = Vector3.Lerp(rb.velocity, rb.velocity.normalized * (hardMaxSpeedKmh / 3.6f), overspeedRatio * Time.fixedDeltaTime * 5f);
+        Vector3 targetVelocity = (rb.velocity.sqrMagnitude > 0.001f ? rb.velocity.normalized : transform.forward) * (hardMaxSpeedKmh / 3.6f);
+        rb.velocity = Vector3.Lerp(rb.velocity, targetVelocity, overspeedRatio * Time.fixedDeltaTime * 5f);
         rb.angularVelocity *= Mathf.Lerp(1f, 0.72f, overspeedRatio);
     }
 
@@ -367,4 +378,82 @@ public class SimpleBusController : MonoBehaviour
         rb.angularVelocity *= 0.65f;
         rb.AddForce(impulseDirection * impactStrength * 2.2f, ForceMode.VelocityChange);
     }
+
+    private static bool IsKeyHeld(KeyCode key)
+    {
+        if (Input.GetKey(key))
+        {
+            return true;
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        return IsKeyHeldInputSystem(key);
+#else
+        return false;
+#endif
+    }
+
+    private static bool IsKeyDown(KeyCode key)
+    {
+        if (Input.GetKeyDown(key))
+        {
+            return true;
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        return IsKeyDownInputSystem(key);
+#else
+        return false;
+#endif
+    }
+
+#if ENABLE_INPUT_SYSTEM
+    private static bool IsKeyHeldInputSystem(KeyCode key)
+    {
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard == null)
+        {
+            return false;
+        }
+
+        switch (key)
+        {
+            case KeyCode.W: return keyboard.wKey.isPressed;
+            case KeyCode.A: return keyboard.aKey.isPressed;
+            case KeyCode.S: return keyboard.sKey.isPressed;
+            case KeyCode.D: return keyboard.dKey.isPressed;
+            case KeyCode.UpArrow: return keyboard.upArrowKey.isPressed;
+            case KeyCode.DownArrow: return keyboard.downArrowKey.isPressed;
+            case KeyCode.LeftArrow: return keyboard.leftArrowKey.isPressed;
+            case KeyCode.RightArrow: return keyboard.rightArrowKey.isPressed;
+            case KeyCode.Space: return keyboard.spaceKey.isPressed;
+            case KeyCode.R: return keyboard.rKey.isPressed;
+            default: return false;
+        }
+    }
+
+    private static bool IsKeyDownInputSystem(KeyCode key)
+    {
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard == null)
+        {
+            return false;
+        }
+
+        switch (key)
+        {
+            case KeyCode.W: return keyboard.wKey.wasPressedThisFrame;
+            case KeyCode.A: return keyboard.aKey.wasPressedThisFrame;
+            case KeyCode.S: return keyboard.sKey.wasPressedThisFrame;
+            case KeyCode.D: return keyboard.dKey.wasPressedThisFrame;
+            case KeyCode.UpArrow: return keyboard.upArrowKey.wasPressedThisFrame;
+            case KeyCode.DownArrow: return keyboard.downArrowKey.wasPressedThisFrame;
+            case KeyCode.LeftArrow: return keyboard.leftArrowKey.wasPressedThisFrame;
+            case KeyCode.RightArrow: return keyboard.rightArrowKey.wasPressedThisFrame;
+            case KeyCode.Space: return keyboard.spaceKey.wasPressedThisFrame;
+            case KeyCode.R: return keyboard.rKey.wasPressedThisFrame;
+            default: return false;
+        }
+    }
+#endif
 }

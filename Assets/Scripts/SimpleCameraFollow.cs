@@ -37,23 +37,23 @@ public class SimpleCameraFollow : MonoBehaviour
 
     private void Update()
     {
-        if (Input.GetKeyDown(cycleViewKey))
+        if (IsKeyDown(cycleViewKey))
         {
             SetView((int)currentView + 1);
         }
-        else if (Input.GetKeyDown(chaseViewKey))
+        else if (IsKeyDown(chaseViewKey))
         {
             SetView((int)CameraView.Chase);
         }
-        else if (Input.GetKeyDown(driverViewKey))
+        else if (IsKeyDown(driverViewKey))
         {
             SetView((int)CameraView.Driver);
         }
-        else if (Input.GetKeyDown(sideViewKey))
+        else if (IsKeyDown(sideViewKey))
         {
             SetView((int)CameraView.Side);
         }
-        else if (Input.GetKeyDown(overheadViewKey))
+        else if (IsKeyDown(overheadViewKey))
         {
             SetView((int)CameraView.Overhead);
         }
@@ -171,5 +171,33 @@ public class SimpleCameraFollow : MonoBehaviour
         {
             cameraComponent.fieldOfView = value;
         }
+    }
+
+    private static bool IsKeyDown(KeyCode key)
+    {
+        if (Input.GetKeyDown(key))
+        {
+            return true;
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard == null)
+        {
+            return false;
+        }
+
+        switch (key)
+        {
+            case KeyCode.C: return keyboard.cKey.wasPressedThisFrame;
+            case KeyCode.Alpha1: return keyboard.digit1Key.wasPressedThisFrame;
+            case KeyCode.Alpha2: return keyboard.digit2Key.wasPressedThisFrame;
+            case KeyCode.Alpha3: return keyboard.digit3Key.wasPressedThisFrame;
+            case KeyCode.Alpha4: return keyboard.digit4Key.wasPressedThisFrame;
+            default: return false;
+        }
+#else
+        return false;
+#endif
     }
 }
