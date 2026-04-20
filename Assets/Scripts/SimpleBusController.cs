@@ -96,8 +96,8 @@ public class SimpleBusController : MonoBehaviour
             return;
         }
 
-        rb.isKinematic = false;
-        rb.useGravity = true;
+        rb.isKinematic = true;
+        rb.useGravity = false;
         DriveArcade();
         UpdateGear();
     }
@@ -141,13 +141,15 @@ public class SimpleBusController : MonoBehaviour
         float turn = steerInput * rotationSpeed * steerMultiplier * Time.fixedDeltaTime;
         currentYaw += turn;
 
-        Vector3 forward = Quaternion.Euler(0f, currentYaw, 0f) * Vector3.forward;
-        Vector3 targetVelocity = forward * currentForwardSpeed;
-        targetVelocity.y = rb.velocity.y;
-
-        rb.velocity = targetVelocity;
+        Vector3 moveStep = Quaternion.Euler(0f, currentYaw, 0f) * Vector3.forward * (currentForwardSpeed * Time.fixedDeltaTime);
+        rb.MovePosition(rb.position + moveStep);
         rb.MoveRotation(Quaternion.Euler(0f, currentYaw, 0f));
-        rb.angularVelocity = Vector3.zero;
+
+        if (!rb.isKinematic)
+        {
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
     }
 
     private void DriveWithWheelColliders()
@@ -358,8 +360,11 @@ public class SimpleBusController : MonoBehaviour
 
     private void ReloadBus()
     {
-        rb.velocity = Vector3.zero;
-        rb.angularVelocity = Vector3.zero;
+        if (!rb.isKinematic)
+        {
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
         transform.SetPositionAndRotation(spawnPosition, spawnRotation);
         currentForwardSpeed = 0f;
         currentYaw = spawnRotation.eulerAngles.y;
@@ -387,14 +392,6 @@ public class SimpleBusController : MonoBehaviour
             rb.velocity *= 0.74f;
             rb.angularVelocity *= 0.65f;
             rb.AddForce(impulseDirection * impactStrength * 1.4f, ForceMode.VelocityChange);
-        }
-        else
-        {
-            Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
-            localVelocity.x = Mathf.Lerp(localVelocity.x, 0f, 0.8f);
-            localVelocity.z = Mathf.Sign(localVelocity.z) * Mathf.Max(0f, Mathf.Abs(localVelocity.z) - impactStrength * 0.35f);
-            rb.velocity = transform.TransformDirection(localVelocity);
-            rb.angularVelocity = Vector3.zero;
         }
     }
 
