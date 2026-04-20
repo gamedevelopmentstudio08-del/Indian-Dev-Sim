@@ -220,6 +220,10 @@ public class GameBootstrap : MonoBehaviour
         main.startSize = 0.045f;
         main.maxParticles = 1800;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
+        main.startColor = new ParticleSystem.MinMaxGradient(
+            new Color(1f, 0.60f, 0.76f, 0.85f),
+            new Color(1f, 0.82f, 0.90f, 0.78f)
+        );
 
         ParticleSystem.EmissionModule emission = rainSystem.emission;
         emission.rateOverTime = 0f;
@@ -237,12 +241,13 @@ public class GameBootstrap : MonoBehaviour
         renderer.renderMode = ParticleSystemRenderMode.Stretch;
         renderer.lengthScale = 2.4f;
         renderer.velocityScale = 0.12f;
+        renderer.material.color = new Color(1f, 0.66f, 0.82f, 0.82f);
 
         CreateWeatherAudioSystem(cam);
 
-        if (weatherChangeIntervalSeconds > 180f)
+        if (weatherChangeIntervalSeconds > 90f)
         {
-            weatherChangeIntervalSeconds = 180f;
+            weatherChangeIntervalSeconds = 90f;
         }
 
         timeOfDayHours = startTimeOfDayHours;
@@ -339,15 +344,26 @@ public class GameBootstrap : MonoBehaviour
     private WeatherCondition PickWeightedCondition(float currentHour)
     {
         bool isNight = currentHour < 5.5f || currentHour >= 19.5f;
-        WeatherCondition[] weighted =
-        {
-            WeatherCondition.Clear,
-            WeatherCondition.Clear,
-            WeatherCondition.Clear,
-            WeatherCondition.Rain,
-            WeatherCondition.Rain,
-            isNight ? WeatherCondition.Thunderstorm : WeatherCondition.Rain
-        };
+        WeatherCondition[] weighted = isNight
+            ? new[]
+            {
+                WeatherCondition.Clear,
+                WeatherCondition.Clear,
+                WeatherCondition.Rain,
+                WeatherCondition.Rain,
+                WeatherCondition.Thunderstorm,
+                WeatherCondition.Thunderstorm,
+                WeatherCondition.Thunderstorm
+            }
+            : new[]
+            {
+                WeatherCondition.Clear,
+                WeatherCondition.Clear,
+                WeatherCondition.Rain,
+                WeatherCondition.Rain,
+                WeatherCondition.Rain,
+                WeatherCondition.Thunderstorm
+            };
 
         return weighted[Random.Range(0, weighted.Length)];
     }
@@ -557,26 +573,26 @@ public class GameBootstrap : MonoBehaviour
                 settings.label = (isNight ? "Night" : isMorning ? "Morning" : isNoon ? "Noon" : "Evening") + " / Clear";
                 break;
             case WeatherCondition.Rain:
-                settings.rainEmissionRate = isNight ? 720f : 650f;
-                settings.rainAudioVolume = 0.38f;
+                settings.rainEmissionRate = isNight ? 820f : 740f;
+                settings.rainAudioVolume = 0.42f;
                 settings.thunderstormActive = false;
-                settings.wetness = 0.7f;
+                settings.wetness = 0.78f;
                 settings.label = (isNight ? "Night" : "Day") + " / Rain";
                 settings.lightIntensity *= 0.62f;
-                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.38f, 0.43f, 0.47f), 0.65f);
-                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.26f, 0.28f, 0.30f), 0.75f);
-                settings.fogDensity *= 2.4f;
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.36f, 0.38f, 0.50f), 0.72f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.28f, 0.24f, 0.34f), 0.72f);
+                settings.fogDensity *= 2.6f;
                 break;
             case WeatherCondition.Thunderstorm:
-                settings.rainEmissionRate = 950f;
-                settings.rainAudioVolume = 0.56f;
+                settings.rainEmissionRate = 1150f;
+                settings.rainAudioVolume = 0.70f;
                 settings.thunderstormActive = true;
                 settings.wetness = 1f;
                 settings.label = "Thunderstorm" + (isNight ? " / Night" : " / Day");
-                settings.lightIntensity *= 0.38f;
-                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.05f, 0.06f, 0.10f), isNight ? 0.85f : 0.65f);
-                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.04f, 0.05f, 0.07f), 0.8f);
-                settings.fogDensity *= 3.2f;
+                settings.lightIntensity *= 0.28f;
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.03f, 0.04f, 0.08f), isNight ? 0.9f : 0.75f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.03f, 0.03f, 0.05f), 0.85f);
+                settings.fogDensity *= 3.8f;
                 break;
         }
 
@@ -800,6 +816,8 @@ public class GameBootstrap : MonoBehaviour
     private void CreateTree(Vector3 position, float scale)
     {
         bool isMountain = position.z > TransitionEndZ;
+        Vector3 colliderSize = isMountain ? new Vector3(1.3f * scale, 5.2f * scale, 1.3f * scale) : new Vector3(1.45f * scale, 4.8f * scale, 1.45f * scale);
+        Vector3 colliderCenter = isMountain ? new Vector3(0f, 2.6f * scale, 0f) : new Vector3(0f, 2.35f * scale, 0f);
 
         if (useImportedEnvironmentPrefabs && importedTreePrefabs != null && importedTreePrefabs.Length > 0)
         {
@@ -811,6 +829,14 @@ public class GameBootstrap : MonoBehaviour
                 instance.transform.position = position;
                 instance.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
                 instance.transform.localScale = Vector3.one * Mathf.Clamp(scale, 0.6f, 1.4f);
+                BoxCollider importedCollider = instance.GetComponent<BoxCollider>();
+                if (importedCollider == null)
+                {
+                    importedCollider = instance.AddComponent<BoxCollider>();
+                }
+
+                importedCollider.center = colliderCenter;
+                importedCollider.size = colliderSize;
                 return;
             }
         }
@@ -857,6 +883,15 @@ public class GameBootstrap : MonoBehaviour
             top.GetComponent<Renderer>().material.color = new Color(0.13f, 0.48f, 0.18f);
             RemoveCollider(top);
         }
+
+        BoxCollider treeCollider = root.GetComponent<BoxCollider>();
+        if (treeCollider == null)
+        {
+            treeCollider = root.AddComponent<BoxCollider>();
+        }
+
+        treeCollider.center = colliderCenter;
+        treeCollider.size = colliderSize;
 
         GameObject lod1 = GameObject.CreatePrimitive(PrimitiveType.Capsule);
         lod1.name = "LOD1";
@@ -2930,6 +2965,10 @@ public class GameBootstrap : MonoBehaviour
         controller.yellowLight = yellow;
         controller.greenLight = green;
         controller.startOffset = startOffset;
+
+        BoxCollider collider = root.AddComponent<BoxCollider>();
+        collider.center = new Vector3(0f, 2.7f, 0f);
+        collider.size = new Vector3(1.05f, 5.9f, 0.95f);
     }
 
     private Renderer CreateLightBulb(Transform parent, Vector3 localPosition, Color color)
@@ -3087,6 +3126,7 @@ public class GameBootstrap : MonoBehaviour
 
         busObject.AddComponent<Rigidbody>();
         AddBusWheelColliders(busObject);
+        AddBusPassengers(busObject);
         bus = busObject.AddComponent<SimpleBusController>();
         busObject.AddComponent<AutoBusReplacer>();
     }
@@ -3134,6 +3174,55 @@ public class GameBootstrap : MonoBehaviour
             sidewaysFriction.asymptoteValue = 1.25f;
             sidewaysFriction.stiffness = 3.2f;
             collider.sidewaysFriction = sidewaysFriction;
+        }
+    }
+
+    private void AddBusPassengers(GameObject busObject)
+    {
+        Vector3[] seats =
+        {
+            new Vector3(-0.58f, 0.55f, 1.55f),
+            new Vector3(0.58f, 0.55f, 1.55f),
+            new Vector3(-0.58f, 0.55f, 0.65f),
+            new Vector3(0.58f, 0.55f, 0.65f),
+            new Vector3(-0.58f, 0.55f, -0.25f),
+            new Vector3(0.58f, 0.55f, -0.25f),
+            new Vector3(-0.58f, 0.55f, -1.15f),
+            new Vector3(0.58f, 0.55f, -1.15f),
+            new Vector3(-0.50f, 0.55f, -2.00f),
+            new Vector3(0.50f, 0.55f, -2.00f)
+        };
+
+        Color[] shirts =
+        {
+            new Color(0.98f, 0.45f, 0.58f),
+            new Color(0.95f, 0.78f, 0.34f),
+            new Color(0.48f, 0.76f, 0.98f),
+            new Color(0.52f, 0.88f, 0.58f)
+        };
+
+        for (int i = 0; i < seats.Length; i++)
+        {
+            GameObject passenger = new GameObject("Passenger " + (i + 1));
+            passenger.transform.SetParent(busObject.transform, false);
+            passenger.transform.localPosition = seats[i];
+            passenger.transform.localRotation = Quaternion.Euler(0f, i % 2 == 0 ? 12f : -12f, 0f);
+
+            GameObject torso = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            torso.name = "Torso";
+            torso.transform.SetParent(passenger.transform, false);
+            torso.transform.localPosition = new Vector3(0f, 0.24f, 0f);
+            torso.transform.localScale = new Vector3(0.28f, 0.42f, 0.28f);
+            torso.GetComponent<Renderer>().material.color = shirts[i % shirts.Length];
+            RemoveCollider(torso);
+
+            GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(passenger.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.72f, 0f);
+            head.transform.localScale = Vector3.one * 0.18f;
+            head.GetComponent<Renderer>().material.color = new Color(0.96f, 0.84f, 0.72f);
+            RemoveCollider(head);
         }
     }
 
@@ -3204,7 +3293,14 @@ public class GameBootstrap : MonoBehaviour
         vehicle.GetComponent<Renderer>().material.color = color;
 
         BoxCollider collider = vehicle.GetComponent<BoxCollider>();
-        collider.isTrigger = true;
+        collider.isTrigger = false;
+
+        Rigidbody rigidbody = vehicle.AddComponent<Rigidbody>();
+        rigidbody.isKinematic = true;
+        rigidbody.useGravity = false;
+        rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        rigidbody.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationY | RigidbodyConstraints.FreezeRotationZ;
 
         AddTrafficVehicleDetails(vehicle.transform, color, false);
 
@@ -3225,7 +3321,14 @@ public class GameBootstrap : MonoBehaviour
         busObject.GetComponent<Renderer>().material.color = color;
 
         BoxCollider collider = busObject.GetComponent<BoxCollider>();
-        collider.isTrigger = true;
+        collider.isTrigger = false;
+
+        Rigidbody rigidbody = busObject.AddComponent<Rigidbody>();
+        rigidbody.isKinematic = true;
+        rigidbody.useGravity = false;
+        rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        rigidbody.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationY | RigidbodyConstraints.FreezeRotationZ;
 
         AddTrafficVehicleDetails(busObject.transform, color, true);
 

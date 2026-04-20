@@ -4,22 +4,22 @@ public class SimpleBusController : MonoBehaviour
 {
     public float speed = 28f;
     public float reverseSpeed = 14f;
-    public float maxForwardSpeed = 90f / 3.6f;
+    public float maxForwardSpeed = 95f / 3.6f;
     public float maxReverseSpeed = 8f;
-    public float rotationSpeed = 18f;
+    public float rotationSpeed = 20f;
     public float brakingForce = 10f;
     public float coastDrag = 0.985f;
-    public float wheelMotorTorque = 8200f;
+    public float wheelMotorTorque = 8600f;
     public float wheelBrakeTorque = 5200f;
     public float idleBrakeTorque = 1400f;
-    public float wheelSteerAngle = 6.5f;
-    public float highSpeedWheelSteerAngle = 2.2f;
+    public float wheelSteerAngle = 7.2f;
+    public float highSpeedWheelSteerAngle = 2.6f;
     public float straightLineAssist = 8f;
-    public float lateralGrip = 9f;
-    public float steeringResponse = 6.5f;
-    public float steeringReturnSpeed = 9f;
-    public float highSpeedSteeringDamping = 4.5f;
-    public float yawStability = 3f;
+    public float lateralGrip = 9.5f;
+    public float steeringResponse = 7.5f;
+    public float steeringReturnSpeed = 10.2f;
+    public float highSpeedSteeringDamping = 4.2f;
+    public float yawStability = 3.4f;
     public float hillAssistTorque = 2600f;
     public float hillAssistSpeedThreshold = 24f;
     public float hillMaxSpeedKmh = 55f;
@@ -35,14 +35,14 @@ public class SimpleBusController : MonoBehaviour
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        rb.mass = 9800f;
-        rb.drag = 0.08f;
-        rb.angularDrag = 1.8f;
+        rb.mass = 7600f;
+        rb.drag = 0.12f;
+        rb.angularDrag = 2.1f;
         rb.interpolation = RigidbodyInterpolation.Interpolate;
         rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         rb.centerOfMass = new Vector3(0f, -1.25f, 0f);
-        rb.maxAngularVelocity = 1.8f;
+        rb.maxAngularVelocity = 2.2f;
         wheelColliders = GetComponentsInChildren<WheelCollider>();
 
         foreach (WheelCollider wheel in wheelColliders)
@@ -299,5 +299,24 @@ public class SimpleBusController : MonoBehaviour
         steering = 0f;
         throttle = 0f;
         steerInput = 0f;
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (rb == null || collision == null || collision.contactCount == 0)
+        {
+            return;
+        }
+
+        Vector3 impulseDirection = -collision.contacts[0].normal;
+        float impactStrength = Mathf.Clamp(collision.relativeVelocity.magnitude, 0f, 20f);
+        if (impactStrength < 1.2f)
+        {
+            return;
+        }
+
+        rb.velocity *= 0.82f;
+        rb.angularVelocity *= 0.72f;
+        rb.AddForce(impulseDirection * impactStrength * 1.8f, ForceMode.VelocityChange);
     }
 }

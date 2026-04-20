@@ -251,15 +251,15 @@ public class AutoBusReplacer : MonoBehaviour
                 continue;
             }
 
-            ScaleFloatField(behaviour, "rotationSpeed", 0.78f, 18f);
-            ScaleFloatField(behaviour, "wheelSteerAngle", 0.72f, 7f);
-            ScaleFloatField(behaviour, "highSpeedWheelSteerAngle", 0.72f, 2.5f);
-            ScaleFloatField(behaviour, "steeringStrength", 0.72f, 40f);
-            ScaleFloatField(behaviour, "steeringResponse", 0.85f, 7f);
-            ScaleFloatField(behaviour, "steeringAtMaxSpeed", 1.15f, 0.45f);
+            ScaleFloatField(behaviour, "rotationSpeed", 1.08f, 24f);
+            ScaleFloatField(behaviour, "wheelSteerAngle", 1.08f, 8.5f);
+            ScaleFloatField(behaviour, "highSpeedWheelSteerAngle", 1.1f, 3.2f);
+            ScaleFloatField(behaviour, "steeringStrength", 1.05f, 48f);
+            ScaleFloatField(behaviour, "steeringResponse", 1.1f, 8.5f);
+            ScaleFloatField(behaviour, "steeringAtMaxSpeed", 1.05f, 0.55f);
             SetFloatFieldIfExists(behaviour, "linearDrag", Mathf.Max(GetFloatFieldOrDefault(behaviour, "linearDrag", busDrag), busDrag));
-            SetFloatFieldIfExists(behaviour, "yawStability", Mathf.Max(GetFloatFieldOrDefault(behaviour, "yawStability", 3f), 4f));
-            SetFloatFieldIfExists(behaviour, "highSpeedSteeringDamping", Mathf.Max(GetFloatFieldOrDefault(behaviour, "highSpeedSteeringDamping", 4.5f), 5.5f));
+            SetFloatFieldIfExists(behaviour, "yawStability", Mathf.Max(GetFloatFieldOrDefault(behaviour, "yawStability", 3f), 3.2f));
+            SetFloatFieldIfExists(behaviour, "highSpeedSteeringDamping", Mathf.Max(GetFloatFieldOrDefault(behaviour, "highSpeedSteeringDamping", 4.5f), 4.8f));
             SetVector3FieldIfExists(behaviour, "centerOfMassOffset", centerOfMass);
         }
     }
