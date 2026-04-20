@@ -29,7 +29,7 @@ public class AutoFbxImporter : AssetPostprocessor
         importer.animationType = ModelImporterAnimationType.None;
         importer.importAnimation = false;
 
-        importer.importMaterials = true;
+        // Unity 2022.3+: `importMaterials` is removed; use `materialImportMode` instead.
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
         importer.materialLocation = ModelImporterMaterialLocation.InPrefab;
         importer.materialName = ModelImporterMaterialName.BasedOnTextureName;
@@ -157,4 +157,3 @@ public class AutoFbxImporter : AssetPostprocessor
     }
 }
 #endif
-
