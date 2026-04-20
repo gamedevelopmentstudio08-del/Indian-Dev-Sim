@@ -141,18 +141,21 @@ public class SimpleCameraFollow : MonoBehaviour
                 offset = new Vector3(0f, 2.15f, 1.9f);
                 lookOffset = new Vector3(0f, 2.1f, 8.5f);
                 rotateWithBus = true;
+                SetPerspectiveProjection();
                 SetFieldOfView(driverFieldOfView);
                 break;
             case CameraView.Side:
                 offset = new Vector3(5.8f, 3.1f, 0.2f);
                 lookOffset = new Vector3(0f, 1.8f, 1.8f);
                 rotateWithBus = true;
+                SetPerspectiveProjection();
                 SetFieldOfView(sideFieldOfView);
                 break;
             case CameraView.Overhead:
                 offset = new Vector3(0f, 16f, -2f);
                 lookOffset = new Vector3(0f, 0.8f, 6f);
                 rotateWithBus = false;
+                SetOrthographicProjection();
                 SetFieldOfView(overheadFieldOfView);
                 break;
             case CameraView.Chase:
@@ -160,8 +163,26 @@ public class SimpleCameraFollow : MonoBehaviour
                 offset = new Vector3(0f, 3.6f, -8.5f);
                 lookOffset = new Vector3(0f, 1.8f, 4.5f);
                 rotateWithBus = true;
+                SetPerspectiveProjection();
                 SetFieldOfView(perspectiveFieldOfView);
                 break;
+        }
+    }
+
+    private void SetPerspectiveProjection()
+    {
+        if (cameraComponent != null)
+        {
+            cameraComponent.orthographic = false;
+        }
+    }
+
+    private void SetOrthographicProjection()
+    {
+        if (cameraComponent != null)
+        {
+            cameraComponent.orthographic = true;
+            cameraComponent.orthographicSize = 12f;
         }
     }
 

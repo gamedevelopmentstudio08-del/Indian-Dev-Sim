@@ -23,3 +23,4 @@ Thumbs.db
 *.fbx filter=lfs diff=lfs merge=lfs -text
 *.mp3 filter=lfs diff=lfs merge=lfs -text
 *.wav filter=lfs diff=lfs merge=lfs -text
+*.jpg
