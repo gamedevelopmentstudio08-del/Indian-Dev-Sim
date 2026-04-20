@@ -57,6 +57,7 @@ public class SimpleBusController : MonoBehaviour
         foreach (WheelCollider wheel in wheelColliders)
         {
             wheel.ConfigureVehicleSubsteps(8f, 12, 15);
+            wheel.enabled = useWheelColliderDrive;
         }
     }
 

@@ -3152,6 +3152,7 @@ public class GameBootstrap : MonoBehaviour
         AddBusWheelColliders(busObject);
         AddBusPassengers(busObject);
         bus = busObject.AddComponent<SimpleBusController>();
+        bus.useWheelColliderDrive = false;
         busObject.AddComponent<AutoBusReplacer>();
     }
 
