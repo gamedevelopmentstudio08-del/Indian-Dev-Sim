@@ -120,7 +120,8 @@ public class SimpleBusController : MonoBehaviour
         ApplyHighSpeedProtection();
 
         float movingAmount = Mathf.Clamp01(rb.velocity.magnitude / 2f);
-        float turn = steerInput * rotationSpeed * movingAmount * Time.fixedDeltaTime;
+        float steerMultiplier = Mathf.Lerp(0.5f, 1f, movingAmount);
+        float turn = steerInput * rotationSpeed * steerMultiplier * Time.fixedDeltaTime;
 
         if (Mathf.Abs(steerInput) > 0.01f)
         {
