@@ -97,19 +97,19 @@ public class SimpleBusController : MonoBehaviour
     private void DriveArcade()
     {
         float speedLimit = hardMaxSpeedKmh / 3.6f;
-        float currentForwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
+        Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
         float desiredForwardSpeed = 0f;
         float acceleration = brakingForce;
 
         if (Input.GetKey(KeyCode.Space))
         {
             desiredForwardSpeed = 0f;
-            acceleration = brakingForce * 2f;
+            acceleration = brakingForce * 3f;
         }
         else if (throttle > 0f)
         {
             desiredForwardSpeed = maxForwardSpeed;
-            acceleration = speed;
+            acceleration = speed * GetHillAssistMultiplier();
         }
         else if (throttle < 0f)
         {
@@ -117,20 +117,17 @@ public class SimpleBusController : MonoBehaviour
             acceleration = reverseSpeed;
         }
 
-        float forwardSpeed = Mathf.MoveTowards(
-            currentForwardSpeed,
+        localVelocity.z = Mathf.MoveTowards(
+            localVelocity.z,
             desiredForwardSpeed,
             acceleration * Time.fixedDeltaTime
         );
-        forwardSpeed = Mathf.Clamp(forwardSpeed, -speedLimit, speedLimit);
+        localVelocity.z = Mathf.Clamp(localVelocity.z, -speedLimit, speedLimit);
+        localVelocity.x = Mathf.Lerp(localVelocity.x, 0f, 12f * Time.fixedDeltaTime);
+        rb.velocity = transform.TransformDirection(localVelocity);
 
-        if (throttle == 0f && !Input.GetKey(KeyCode.Space))
-        {
-            forwardSpeed = Mathf.MoveTowards(forwardSpeed, 0f, brakingForce * 0.5f * Time.fixedDeltaTime);
-        }
-
-        float speedRatio = Mathf.Clamp01(Mathf.Abs(forwardSpeed) / maxForwardSpeed);
-        float steerMultiplier = Mathf.Lerp(1f, 0.45f, speedRatio);
+        float speedRatio = Mathf.Clamp01(Mathf.Abs(localVelocity.z) / maxForwardSpeed);
+        float steerMultiplier = Mathf.Lerp(1f, 0.35f, speedRatio);
         float turn = steerInput * rotationSpeed * steerMultiplier * Time.fixedDeltaTime;
 
         if (Mathf.Abs(steerInput) > 0.01f)
@@ -138,7 +135,7 @@ public class SimpleBusController : MonoBehaviour
             rb.MoveRotation(rb.rotation * Quaternion.Euler(0f, turn, 0f));
         }
 
-        rb.velocity = transform.forward * forwardSpeed + Vector3.up * rb.velocity.y;
+        rb.angularVelocity = Vector3.Lerp(rb.angularVelocity, Vector3.zero, 14f * Time.fixedDeltaTime);
     }
 
     private void DriveWithWheelColliders()
@@ -375,7 +372,10 @@ public class SimpleBusController : MonoBehaviour
 
         rb.velocity *= 0.74f;
         rb.angularVelocity *= 0.65f;
-        rb.AddForce(impulseDirection * impactStrength * 2.2f, ForceMode.VelocityChange);
+        if (useWheelColliderDrive)
+        {
+            rb.AddForce(impulseDirection * impactStrength * 1.4f, ForceMode.VelocityChange);
+        }
     }
 
     private static bool IsKeyHeld(KeyCode key)
