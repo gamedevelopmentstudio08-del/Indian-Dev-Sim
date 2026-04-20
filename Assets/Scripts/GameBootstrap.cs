@@ -39,27 +39,36 @@ public class GameBootstrap : MonoBehaviour
 
     private enum WeatherTimePreset
     {
-        DayClear,
-        DayCloudy,
-        DayRain,
+        MorningSunny,
+        NoonSunny,
+        EveningSunny,
         NightClear,
-        NightRain
+        RainyDay,
+        ThunderstormNight
     }
 
     private SimpleBusController bus;
     private Text speedText;
     private Image hudPanel;
     private Light sunLight;
+    private Light lightningLight;
     private ParticleSystem rainSystem;
+    private AudioSource rainAudioSource;
+    private AudioSource thunderAudioSource;
+    private AudioClip rainLoopClip;
+    private AudioClip thunderClip;
     private float nextWeatherChangeTime;
+    private float nextLightningTime;
+    private float lightningFlashEndTime;
+    private bool thunderstormActive;
     private Terrain mountainTerrain;
     private Vector3 cityBusStartPosition = new Vector3(0f, 1.2f, -430f);
     private Quaternion cityBusStartRotation = Quaternion.identity;
-    private string weatherLabel = "Day / Clear";
-    private string hudMessage = "Speed: 0 km/h\nGear: N\nWeather: Day / Clear";
+    private string weatherLabel = "Morning / Sunny";
+    private string hudMessage = "Speed: 0 km/h\nGear: N\nWeather: Morning / Sunny";
 
     [Header("Weather Cycle")]
-    public float weatherChangeIntervalSeconds = 7200f;
+    public float weatherChangeIntervalSeconds = 180f;
 
     private void Start()
     {
@@ -75,6 +84,7 @@ public class GameBootstrap : MonoBehaviour
         }
 
         UpdateWeatherCycle();
+        UpdateStormEffects();
 
         if (bus == null || speedText == null)
         {
@@ -166,8 +176,49 @@ public class GameBootstrap : MonoBehaviour
         renderer.lengthScale = 2.4f;
         renderer.velocityScale = 0.12f;
 
-        ApplyWeatherPreset(WeatherTimePreset.DayClear);
+        CreateWeatherAudioSystem(cam);
+
+        if (weatherChangeIntervalSeconds > 180f)
+        {
+            weatherChangeIntervalSeconds = 180f;
+        }
+
+        ApplyWeatherPreset(WeatherTimePreset.MorningSunny);
         nextWeatherChangeTime = Time.time + weatherChangeIntervalSeconds;
+    }
+
+    private void CreateWeatherAudioSystem(Camera cam)
+    {
+        GameObject audioRoot = new GameObject("Weather Audio");
+        if (cam != null)
+        {
+            audioRoot.transform.SetParent(cam.transform, false);
+            audioRoot.transform.localPosition = Vector3.zero;
+        }
+
+        rainAudioSource = audioRoot.AddComponent<AudioSource>();
+        rainAudioSource.playOnAwake = false;
+        rainAudioSource.loop = true;
+        rainAudioSource.spatialBlend = 0f;
+        rainAudioSource.volume = 0f;
+
+        thunderAudioSource = audioRoot.AddComponent<AudioSource>();
+        thunderAudioSource.playOnAwake = false;
+        thunderAudioSource.loop = false;
+        thunderAudioSource.spatialBlend = 0f;
+        thunderAudioSource.volume = 0.8f;
+
+        rainLoopClip = CreateProceduralWeatherClip("RainLoop", 4f, 0.085f, false);
+        thunderClip = CreateProceduralWeatherClip("Thunder", 2.4f, 0.35f, true);
+
+        GameObject lightningObject = new GameObject("Lightning Flash");
+        lightningObject.transform.SetParent(transform, false);
+        lightningLight = lightningObject.AddComponent<Light>();
+        lightningLight.type = LightType.Directional;
+        lightningLight.intensity = 0f;
+        lightningLight.color = Color.white;
+        lightningLight.shadows = LightShadows.None;
+        lightningObject.transform.rotation = Quaternion.Euler(18f, -35f, 0f);
     }
 
     private void UpdateWeatherCycle()
@@ -181,18 +232,43 @@ public class GameBootstrap : MonoBehaviour
         nextWeatherChangeTime = Time.time + weatherChangeIntervalSeconds;
     }
 
+    private void UpdateStormEffects()
+    {
+        if (!thunderstormActive)
+        {
+            if (lightningLight != null)
+            {
+                lightningLight.intensity = 0f;
+            }
+
+            return;
+        }
+
+        if (Time.time >= nextLightningTime)
+        {
+            TriggerLightningFlash();
+            nextLightningTime = Time.time + Random.Range(4f, 9f);
+        }
+
+        if (lightningLight != null && Time.time >= lightningFlashEndTime)
+        {
+            lightningLight.intensity = 0f;
+        }
+    }
+
     private WeatherTimePreset PickWeightedWeatherPreset()
     {
         WeatherTimePreset[] weightedPresets =
         {
-            WeatherTimePreset.DayClear,
-            WeatherTimePreset.DayClear,
-            WeatherTimePreset.DayClear,
-            WeatherTimePreset.DayCloudy,
-            WeatherTimePreset.DayCloudy,
-            WeatherTimePreset.DayRain,
+            WeatherTimePreset.MorningSunny,
+            WeatherTimePreset.MorningSunny,
+            WeatherTimePreset.NoonSunny,
+            WeatherTimePreset.NoonSunny,
+            WeatherTimePreset.EveningSunny,
             WeatherTimePreset.NightClear,
-            WeatherTimePreset.NightRain
+            WeatherTimePreset.RainyDay,
+            WeatherTimePreset.RainyDay,
+            WeatherTimePreset.ThunderstormNight
         };
 
         return weightedPresets[Random.Range(0, weightedPresets.Length)];
@@ -200,31 +276,111 @@ public class GameBootstrap : MonoBehaviour
 
     private void ApplyWeatherPreset(WeatherTimePreset preset)
     {
-        bool rainEnabled = preset == WeatherTimePreset.DayRain || preset == WeatherTimePreset.NightRain;
+        bool rainEnabled = preset == WeatherTimePreset.RainyDay || preset == WeatherTimePreset.ThunderstormNight;
+        thunderstormActive = preset == WeatherTimePreset.ThunderstormNight;
         if (rainSystem != null)
         {
             ParticleSystem.EmissionModule emission = rainSystem.emission;
-            emission.rateOverTime = rainEnabled ? 650f : 0f;
+            emission.rateOverTime = rainEnabled ? (thunderstormActive ? 950f : 650f) : 0f;
+        }
+
+        if (rainAudioSource != null)
+        {
+            if (rainEnabled)
+            {
+                if (rainLoopClip != null)
+                {
+                    rainAudioSource.clip = rainLoopClip;
+                }
+
+                if (!rainAudioSource.isPlaying && rainAudioSource.clip != null)
+                {
+                    rainAudioSource.Play();
+                }
+
+                rainAudioSource.volume = thunderstormActive ? 0.56f : 0.38f;
+            }
+            else
+            {
+                rainAudioSource.Stop();
+                rainAudioSource.volume = 0f;
+            }
+        }
+
+        if (thunderAudioSource != null)
+        {
+            thunderAudioSource.volume = thunderstormActive ? 0.9f : 0f;
+        }
+
+        if (thunderstormActive)
+        {
+            nextLightningTime = Time.time + Random.Range(1.5f, 4f);
+        }
+        else if (lightningLight != null)
+        {
+            lightningLight.intensity = 0f;
         }
 
         switch (preset)
         {
-            case WeatherTimePreset.DayClear:
-                ApplyLightAndSky("Day / Clear", 1f, new Color(0.64f, 0.78f, 0.95f), new Color(0.44f, 0.52f, 0.58f), 0.0008f, new Vector3(50f, -30f, 0f));
+            case WeatherTimePreset.MorningSunny:
+                ApplyLightAndSky("Morning / Sunny", 0.82f, new Color(0.82f, 0.84f, 0.76f), new Color(0.52f, 0.55f, 0.48f), 0.0010f, new Vector3(28f, -28f, 0f));
                 break;
-            case WeatherTimePreset.DayCloudy:
-                ApplyLightAndSky("Day / Cloudy", 0.62f, new Color(0.50f, 0.56f, 0.60f), new Color(0.34f, 0.36f, 0.38f), 0.0020f, new Vector3(42f, -35f, 0f));
+            case WeatherTimePreset.NoonSunny:
+                ApplyLightAndSky("Noon / Sunny", 1.08f, new Color(0.64f, 0.79f, 0.96f), new Color(0.44f, 0.53f, 0.58f), 0.0008f, new Vector3(62f, -30f, 0f));
                 break;
-            case WeatherTimePreset.DayRain:
-                ApplyLightAndSky("Day / Rain", 0.46f, new Color(0.38f, 0.43f, 0.47f), new Color(0.26f, 0.28f, 0.30f), 0.0032f, new Vector3(38f, -35f, 0f));
+            case WeatherTimePreset.EveningSunny:
+                ApplyLightAndSky("Evening / Sunny", 0.55f, new Color(0.82f, 0.60f, 0.44f), new Color(0.34f, 0.28f, 0.26f), 0.0018f, new Vector3(18f, -42f, 0f));
                 break;
             case WeatherTimePreset.NightClear:
-                ApplyLightAndSky("Night / Clear", 0.16f, new Color(0.06f, 0.08f, 0.14f), new Color(0.06f, 0.07f, 0.10f), 0.0014f, new Vector3(12f, -45f, 0f));
+                ApplyLightAndSky("Night / Clear", 0.18f, new Color(0.05f, 0.07f, 0.14f), new Color(0.05f, 0.06f, 0.09f), 0.0013f, new Vector3(10f, -48f, 0f));
                 break;
-            case WeatherTimePreset.NightRain:
-                ApplyLightAndSky("Night / Rain", 0.11f, new Color(0.04f, 0.05f, 0.08f), new Color(0.05f, 0.06f, 0.08f), 0.0040f, new Vector3(10f, -45f, 0f));
+            case WeatherTimePreset.RainyDay:
+                ApplyLightAndSky("Rainy Day", 0.44f, new Color(0.40f, 0.44f, 0.48f), new Color(0.25f, 0.27f, 0.30f), 0.0034f, new Vector3(34f, -40f, 0f));
+                break;
+            case WeatherTimePreset.ThunderstormNight:
+                ApplyLightAndSky("Thunderstorm / Night", 0.08f, new Color(0.03f, 0.04f, 0.07f), new Color(0.04f, 0.05f, 0.07f), 0.0052f, new Vector3(8f, -55f, 0f));
                 break;
         }
+    }
+
+    private void TriggerLightningFlash()
+    {
+        if (lightningLight == null)
+        {
+            return;
+        }
+
+        lightningLight.transform.rotation = Quaternion.Euler(Random.Range(10f, 20f), Random.Range(-50f, 50f), 0f);
+        lightningLight.intensity = Random.Range(4.8f, 7.2f);
+        lightningFlashEndTime = Time.time + Random.Range(0.08f, 0.16f);
+
+        if (thunderAudioSource != null && thunderClip != null)
+        {
+            thunderAudioSource.PlayOneShot(thunderClip, Random.Range(0.65f, 0.95f));
+        }
+    }
+
+    private AudioClip CreateProceduralWeatherClip(string name, float durationSeconds, float volumeScale, bool thunder)
+    {
+        const int sampleRate = 44100;
+        int sampleCount = Mathf.Max(1, Mathf.CeilToInt(durationSeconds * sampleRate));
+        float[] samples = new float[sampleCount];
+        float seed = Random.Range(0f, 1000f);
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = i / (float)sampleRate;
+            float baseNoise = Mathf.PerlinNoise(seed, t * (thunder ? 18f : 120f)) * 2f - 1f;
+            float detailNoise = Mathf.PerlinNoise(seed + 31.7f, t * (thunder ? 8f : 250f)) * 2f - 1f;
+            float rumble = thunder ? Mathf.Sin(t * 26f) * 0.6f + Mathf.Sin(t * 42f) * 0.25f : 0f;
+            float envelope = thunder ? Mathf.Exp(-t * 1.8f) : 1f;
+            samples[i] = Mathf.Clamp((baseNoise * 0.7f + detailNoise * 0.3f + rumble) * volumeScale * envelope, -1f, 1f);
+        }
+
+        AudioClip clip = AudioClip.Create(name, sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
     }
 
     private void ApplyLightAndSky(string label, float lightIntensity, Color skyColor, Color fogColor, float fogDensity, Vector3 lightRotation)
@@ -341,6 +497,7 @@ public class GameBootstrap : MonoBehaviour
         CreateSideRoadLines(-70f, 1);
         CreateSideRoadLines(260f, -1);
         CreateRoadsideTrees();
+        CreateFlowerPatches();
         CreateMountainRoute();
     }
 
@@ -421,6 +578,89 @@ public class GameBootstrap : MonoBehaviour
         top.transform.localScale = new Vector3(1.65f * scale, 1.35f * scale, 1.65f * scale);
         top.GetComponent<Renderer>().material.color = new Color(0.13f, 0.48f, 0.18f);
         RemoveCollider(top);
+    }
+
+    private void CreateFlowerPatches()
+    {
+        Random.InitState(9041);
+
+        for (int i = 0; i < 110; i++)
+        {
+            float x = Random.Range(-420f, 420f);
+            float z = Random.Range(-360f, 360f);
+            if (IsBuildingOnRoad(x, z, 2.5f, 2.5f, 2.5f))
+            {
+                continue;
+            }
+
+            if (Mathf.Abs(x) < 18f && Mathf.Abs(z) < 470f)
+            {
+                continue;
+            }
+
+            CreateFlowerCluster(new Vector3(x, 0f, z), Random.Range(2f, 4.5f));
+        }
+    }
+
+    private void CreateMountainFlowerClusters(List<Vector3> roadPoints)
+    {
+        if (roadPoints == null || roadPoints.Count == 0)
+        {
+            return;
+        }
+
+        Random.InitState(9155);
+        for (int i = 0; i < 45; i++)
+        {
+            Vector3 point = new Vector3(Random.Range(-500f, 500f), 0f, Random.Range(620f, 1830f));
+            float roadHeight;
+            if (DistanceToRoad(point, roadPoints, out roadHeight) < 18f)
+            {
+                continue;
+            }
+
+            point = SampleTerrainPoint(point);
+            CreateFlowerCluster(point, Random.Range(1.4f, 3.2f));
+        }
+    }
+
+    private void CreateFlowerCluster(Vector3 center, float radius)
+    {
+        int flowerCount = Random.Range(5, 10);
+        Color[] petals =
+        {
+            new Color(0.95f, 0.42f, 0.50f),
+            new Color(0.98f, 0.80f, 0.28f),
+            new Color(0.94f, 0.58f, 0.84f),
+            new Color(0.98f, 0.95f, 0.90f),
+            new Color(0.40f, 0.84f, 0.54f)
+        };
+
+        for (int i = 0; i < flowerCount; i++)
+        {
+            Vector2 offset = Random.insideUnitCircle * radius;
+            Vector3 flowerBase = new Vector3(center.x + offset.x, 0f, center.z + offset.y);
+            if (IsBuildingOnRoad(flowerBase.x, flowerBase.z, 1.2f, 1.2f, 1f))
+            {
+                continue;
+            }
+
+            GameObject stem = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            stem.name = "Flower Stem";
+            stem.transform.position = SampleTerrainPoint(flowerBase);
+            stem.transform.localScale = new Vector3(0.05f, Random.Range(0.18f, 0.34f), 0.05f);
+            stem.transform.position += Vector3.up * (stem.transform.localScale.y * 0.5f);
+            stem.GetComponent<Renderer>().material.color = new Color(0.16f, 0.56f, 0.24f);
+            RemoveCollider(stem);
+
+            GameObject bloom = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            bloom.name = "Flower Bloom";
+            bloom.transform.position = stem.transform.position + Vector3.up * (0.18f + stem.transform.localScale.y * 0.5f);
+            float bloomScale = Random.Range(0.12f, 0.22f);
+            bloom.transform.localScale = Vector3.one * bloomScale;
+            bloom.GetComponent<Renderer>().material.color = petals[Random.Range(0, petals.Length)];
+            RemoveCollider(bloom);
+        }
     }
 
     private void CreateMountainRoute()
@@ -1505,6 +1745,8 @@ public class GameBootstrap : MonoBehaviour
                 CreateTree(point, Random.Range(0.68f, 1.05f));
             }
         }
+
+        CreateMountainFlowerClusters(roadPoints);
     }
 
     private void CreateMountainDemoVehicles(List<Vector3> roadPoints)
@@ -2000,6 +2242,7 @@ public class GameBootstrap : MonoBehaviour
         busObject.AddComponent<Rigidbody>();
         AddBusWheelColliders(busObject);
         bus = busObject.AddComponent<SimpleBusController>();
+        busObject.AddComponent<AutoBusReplacer>();
     }
 
     private void AddBusWheelColliders(GameObject busObject)
@@ -2117,6 +2360,8 @@ public class GameBootstrap : MonoBehaviour
         BoxCollider collider = vehicle.GetComponent<BoxCollider>();
         collider.isTrigger = true;
 
+        AddTrafficVehicleDetails(vehicle.transform, color, false);
+
         DemoVehicleMover mover = vehicle.AddComponent<DemoVehicleMover>();
         mover.speed = speed;
         mover.startZ = startZ;
@@ -2136,6 +2381,8 @@ public class GameBootstrap : MonoBehaviour
         BoxCollider collider = busObject.GetComponent<BoxCollider>();
         collider.isTrigger = true;
 
+        AddTrafficVehicleDetails(busObject.transform, color, true);
+
         DemoVehicleMover mover = busObject.AddComponent<DemoVehicleMover>();
         mover.moveOnXAxis = true;
         mover.speed = speed;
@@ -2143,6 +2390,53 @@ public class GameBootstrap : MonoBehaviour
         mover.endX = 470f;
         mover.laneZ = laneZ;
         mover.moveDirection = direction;
+    }
+
+    private void AddTrafficVehicleDetails(Transform root, Color bodyColor, bool isBus)
+    {
+        GameObject roof = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        roof.name = "Traffic Roof";
+        roof.transform.SetParent(root, false);
+        roof.transform.localPosition = isBus ? new Vector3(0f, 0.78f, 0.12f) : new Vector3(0f, 0.52f, 0.05f);
+        roof.transform.localScale = isBus ? new Vector3(2.6f, 0.32f, 1.45f) : new Vector3(1.05f, 0.26f, 1.75f);
+        roof.GetComponent<Renderer>().material.color = Color.Lerp(bodyColor, Color.white, 0.26f);
+        RemoveCollider(roof);
+
+        GameObject windshield = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        windshield.name = "Traffic Windshield";
+        windshield.transform.SetParent(root, false);
+        windshield.transform.localPosition = isBus ? new Vector3(0f, 0.24f, 1.66f) : new Vector3(0f, 0.18f, 1.18f);
+        windshield.transform.localScale = isBus ? new Vector3(2.22f, 0.72f, 0.12f) : new Vector3(0.98f, 0.45f, 0.08f);
+        windshield.GetComponent<Renderer>().material.color = new Color(0.72f, 0.88f, 0.98f);
+        RemoveCollider(windshield);
+
+        GameObject rearPanel = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        rearPanel.name = "Traffic Rear Panel";
+        rearPanel.transform.SetParent(root, false);
+        rearPanel.transform.localPosition = isBus ? new Vector3(0f, 0.22f, -1.74f) : new Vector3(0f, 0.14f, -1.08f);
+        rearPanel.transform.localScale = isBus ? new Vector3(2.18f, 0.68f, 0.10f) : new Vector3(0.92f, 0.36f, 0.08f);
+        rearPanel.GetComponent<Renderer>().material.color = Color.Lerp(bodyColor, Color.black, 0.2f);
+        RemoveCollider(rearPanel);
+
+        float wheelOffsetX = isBus ? 1.2f : 0.72f;
+        float wheelOffsetZ = isBus ? 1.2f : 0.92f;
+        float wheelY = isBus ? -0.18f : -0.28f;
+        CreateTrafficWheel(root, "FrontLeft Wheel", new Vector3(-wheelOffsetX, wheelY, wheelOffsetZ), isBus ? 0.46f : 0.34f);
+        CreateTrafficWheel(root, "FrontRight Wheel", new Vector3(wheelOffsetX, wheelY, wheelOffsetZ), isBus ? 0.46f : 0.34f);
+        CreateTrafficWheel(root, "RearLeft Wheel", new Vector3(-wheelOffsetX, wheelY, -wheelOffsetZ), isBus ? 0.46f : 0.34f);
+        CreateTrafficWheel(root, "RearRight Wheel", new Vector3(wheelOffsetX, wheelY, -wheelOffsetZ), isBus ? 0.46f : 0.34f);
+    }
+
+    private void CreateTrafficWheel(Transform parent, string name, Vector3 localPosition, float radius)
+    {
+        GameObject wheel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        wheel.name = name;
+        wheel.transform.SetParent(parent, false);
+        wheel.transform.localPosition = localPosition;
+        wheel.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+        wheel.transform.localScale = new Vector3(radius, radius * 0.35f, radius);
+        wheel.GetComponent<Renderer>().material.color = new Color(0.08f, 0.08f, 0.08f);
+        RemoveCollider(wheel);
     }
 
     private void SetupCamera()
