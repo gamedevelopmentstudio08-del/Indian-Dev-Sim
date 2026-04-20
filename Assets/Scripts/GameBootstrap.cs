@@ -619,8 +619,8 @@ public class GameBootstrap : MonoBehaviour
                 settings.wetness = 0.78f;
                 settings.label = (isNight ? "Night" : "Day") + " / Rain";
                 settings.lightIntensity *= 0.62f;
-                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.42f, 0.34f, 0.48f), 0.74f);
-                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.34f, 0.18f, 0.30f), 0.76f);
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.50f, 0.58f, 0.66f), 0.74f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.42f, 0.48f, 0.55f), 0.76f);
                 settings.fogDensity *= 2.6f;
                 break;
             case WeatherCondition.Thunderstorm:
@@ -630,8 +630,8 @@ public class GameBootstrap : MonoBehaviour
                 settings.wetness = 1f;
                 settings.label = "Thunderstorm" + (isNight ? " / Night" : " / Day");
                 settings.lightIntensity *= 0.28f;
-                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.08f, 0.03f, 0.06f), isNight ? 0.9f : 0.75f);
-                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.12f, 0.04f, 0.08f), 0.85f);
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.10f, 0.14f, 0.20f), isNight ? 0.9f : 0.75f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.12f, 0.18f, 0.24f), 0.85f);
                 settings.fogDensity *= 3.8f;
                 break;
         }
@@ -1074,6 +1074,7 @@ public class GameBootstrap : MonoBehaviour
             CarveRoadIntoTerrain(mountainTerrain.terrainData, mountainRoad, CityRoadWidth * 0.5f, CityRoadWidth * 0.5f + 8f);
             CreateRoadMeshStrip(mountainRoad, CityRoadWidth, "Mountain Road Mesh", asphaltDryMaterial, true);
             CreateMountainRoadVisuals(mountainRoad, "Mountain Climb Road", true, false);
+            CreateMountainSafetyWalls(mountainRoad);
             CreateMountainDemoVehicles(mountainRoad);
         }
 
@@ -2502,6 +2503,46 @@ public class GameBootstrap : MonoBehaviour
         {
             box.sharedMaterial = roadPhysicsMaterial;
         }
+    }
+
+    private void CreateMountainSafetyWalls(List<Vector3> roadPoints)
+    {
+        if (roadPoints == null || roadPoints.Count < 2)
+        {
+            return;
+        }
+
+        for (int i = 0; i < roadPoints.Count - 1; i++)
+        {
+            Vector3 start = roadPoints[i];
+            Vector3 end = roadPoints[i + 1];
+            Vector3 previous = i > 0 ? roadPoints[i - 1] : start - (end - start);
+            Vector3 next = i < roadPoints.Count - 2 ? roadPoints[i + 2] : end + (end - start);
+
+            if (!TryGetRoadSegmentFrame(start, end, previous, next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length))
+            {
+                continue;
+            }
+
+            CreateMountainSafetyWallSegment(midpoint, rotation, roadUp, roadRight, length, -(CityRoadEdgeOffset + 0.55f));
+            CreateMountainSafetyWallSegment(midpoint, rotation, roadUp, roadRight, length, CityRoadEdgeOffset + 0.55f);
+        }
+    }
+
+    private void CreateMountainSafetyWallSegment(Vector3 midpoint, Quaternion rotation, Vector3 roadUp, Vector3 roadRight, float length, float lateralOffset)
+    {
+        GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        wall.name = "Mountain Safety Wall";
+        wall.transform.position = midpoint + roadRight * lateralOffset + roadUp * 0.50f;
+        wall.transform.rotation = rotation;
+        wall.transform.localScale = new Vector3(0.18f, 1.0f, length + 0.45f);
+        Renderer renderer = wall.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.enabled = false;
+        }
+
+        ConfigureBarrierCollider(wall);
     }
 
     private void CreateMountainRoadTrees(Vector3 start, Vector3 end)
