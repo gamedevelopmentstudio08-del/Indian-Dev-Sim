@@ -50,6 +50,12 @@ public class AutoBusReplacer : MonoBehaviour
             return;
         }
 
+        SimpleBusController busController = _target != null ? _target.GetComponent<SimpleBusController>() : null;
+        if (busController != null && !busController.useWheelColliderDrive)
+        {
+            return;
+        }
+
         StabilizeBody(_targetRb, _target.transform);
     }
 

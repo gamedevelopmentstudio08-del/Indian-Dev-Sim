@@ -79,11 +79,10 @@ public class SimpleBusController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        float steerRate = Mathf.Abs(steerInput) > 0.01f ? steeringResponse : steeringReturnSpeed;
-        steering = Mathf.MoveTowards(steering, steerInput, steerRate * Time.fixedDeltaTime);
-
         if (useWheelColliderDrive && wheelColliders != null && wheelColliders.Length >= 4)
         {
+            float steerRate = Mathf.Abs(steerInput) > 0.01f ? steeringResponse : steeringReturnSpeed;
+            steering = Mathf.MoveTowards(steering, steerInput, steerRate * Time.fixedDeltaTime);
             DriveWithWheelColliders();
             ApplyLowSpeedSteeringAssist();
             ApplyHighSpeedProtection();
@@ -97,35 +96,49 @@ public class SimpleBusController : MonoBehaviour
 
     private void DriveArcade()
     {
+        float speedLimit = hardMaxSpeedKmh / 3.6f;
+        float currentForwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
+        float desiredForwardSpeed = 0f;
+        float acceleration = brakingForce;
+
         if (Input.GetKey(KeyCode.Space))
         {
-            rb.velocity = Vector3.Lerp(rb.velocity, Vector3.zero, brakingForce * Time.fixedDeltaTime);
-            rb.angularVelocity = Vector3.Lerp(rb.angularVelocity, Vector3.zero, brakingForce * Time.fixedDeltaTime);
-            return;
+            desiredForwardSpeed = 0f;
+            acceleration = brakingForce * 2f;
         }
-
-        if (throttle > 0f)
+        else if (throttle > 0f)
         {
-            float hillAssist = GetHillAssistMultiplier();
-            rb.AddForce(transform.forward * speed * hillAssist, ForceMode.Acceleration);
+            desiredForwardSpeed = maxForwardSpeed;
+            acceleration = speed;
         }
         else if (throttle < 0f)
         {
-            rb.AddForce(-transform.forward * reverseSpeed, ForceMode.Acceleration);
+            desiredForwardSpeed = -maxReverseSpeed;
+            acceleration = reverseSpeed;
         }
 
-        ApplySmoothSpeedLimit();
-        ApplyCoasting();
-        ApplyDirectionalStability();
-        ApplyHighSpeedProtection();
+        float forwardSpeed = Mathf.MoveTowards(
+            currentForwardSpeed,
+            desiredForwardSpeed,
+            acceleration * Time.fixedDeltaTime
+        );
+        forwardSpeed = Mathf.Clamp(forwardSpeed, -speedLimit, speedLimit);
 
-        float movingAmount = Mathf.Clamp01(rb.velocity.magnitude / 2f);
-        float turn = steerInput * rotationSpeed * movingAmount * Time.fixedDeltaTime;
+        if (throttle == 0f && !Input.GetKey(KeyCode.Space))
+        {
+            forwardSpeed = Mathf.MoveTowards(forwardSpeed, 0f, brakingForce * 0.5f * Time.fixedDeltaTime);
+        }
+
+        float speedRatio = Mathf.Clamp01(Mathf.Abs(forwardSpeed) / maxForwardSpeed);
+        float steerMultiplier = Mathf.Lerp(1f, 0.45f, speedRatio);
+        float turn = steerInput * rotationSpeed * steerMultiplier * Time.fixedDeltaTime;
 
         if (Mathf.Abs(steerInput) > 0.01f)
         {
             rb.MoveRotation(rb.rotation * Quaternion.Euler(0f, turn, 0f));
         }
+
+        rb.velocity = transform.forward * forwardSpeed + Vector3.up * rb.velocity.y;
     }
 
     private void DriveWithWheelColliders()
@@ -169,37 +182,22 @@ public class SimpleBusController : MonoBehaviour
 
     private void ApplySmoothSpeedLimit()
     {
-        float maxForward = maxForwardSpeed;
-        float uphillAlignment = Mathf.Max(0f, Vector3.Dot(transform.forward.normalized, Vector3.up));
-        if (uphillAlignment > 0.10f)
-        {
-            maxForward = Mathf.Min(maxForward, hillMaxSpeedKmh / 3.6f);
-        }
-
-        Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
-
-        if (localVelocity.z > maxForward)
-        {
-            localVelocity.z = Mathf.Lerp(localVelocity.z, maxForward, 4f * Time.fixedDeltaTime);
-        }
-        else if (localVelocity.z < -maxReverseSpeed)
-        {
-            localVelocity.z = Mathf.Lerp(localVelocity.z, -maxReverseSpeed, 4f * Time.fixedDeltaTime);
-        }
-
-        rb.velocity = transform.TransformDirection(localVelocity);
+        float maxForward = Mathf.Min(maxForwardSpeed, hardMaxSpeedKmh / 3.6f);
+        float forwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
+        forwardSpeed = Mathf.Clamp(forwardSpeed, -maxReverseSpeed, maxForward);
+        rb.velocity = transform.forward * forwardSpeed + Vector3.up * rb.velocity.y;
     }
 
     private void ApplyCoasting()
     {
-        if (Mathf.Abs(throttle) > 0.01f)
+        if (Mathf.Abs(throttle) > 0.01f || Input.GetKey(KeyCode.Space))
         {
             return;
         }
 
-        Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
-        localVelocity.z *= coastDrag;
-        rb.velocity = transform.TransformDirection(localVelocity);
+        float forwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
+        forwardSpeed *= coastDrag;
+        rb.velocity = transform.forward * forwardSpeed + Vector3.up * rb.velocity.y;
     }
 
     private void ApplyDirectionalStability()
@@ -276,7 +274,8 @@ public class SimpleBusController : MonoBehaviour
 
     private void ApplyHighSpeedProtection()
     {
-        float speedKmh = rb.velocity.magnitude * 3.6f;
+        float forwardSpeed = Vector3.Dot(rb.velocity, transform.forward);
+        float speedKmh = Mathf.Abs(forwardSpeed) * 3.6f;
         if (speedKmh <= overSpeedBrakeKmh)
         {
             return;
@@ -284,14 +283,13 @@ public class SimpleBusController : MonoBehaviour
 
         if (speedKmh > hardMaxSpeedKmh)
         {
-            Vector3 direction = rb.velocity.sqrMagnitude > 0.001f ? rb.velocity.normalized : transform.forward;
-            rb.velocity = direction * (hardMaxSpeedKmh / 3.6f);
+            rb.velocity = transform.forward * Mathf.Sign(forwardSpeed) * (hardMaxSpeedKmh / 3.6f);
             rb.angularVelocity *= 0.45f;
             return;
         }
 
         float overspeedRatio = Mathf.InverseLerp(overSpeedBrakeKmh, hardMaxSpeedKmh, speedKmh);
-        Vector3 targetVelocity = (rb.velocity.sqrMagnitude > 0.001f ? rb.velocity.normalized : transform.forward) * (hardMaxSpeedKmh / 3.6f);
+        Vector3 targetVelocity = transform.forward * Mathf.Sign(forwardSpeed) * (hardMaxSpeedKmh / 3.6f);
         rb.velocity = Vector3.Lerp(rb.velocity, targetVelocity, overspeedRatio * Time.fixedDeltaTime * 5f);
         rb.angularVelocity *= Mathf.Lerp(1f, 0.72f, overspeedRatio);
     }

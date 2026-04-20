@@ -3425,6 +3425,7 @@ public class GameBootstrap : MonoBehaviour
 
         cam.nearClipPlane = 0.1f;
         cam.farClipPlane = 1200f;
+        cam.orthographic = false;
 
         SimpleCameraFollow follow = cam.GetComponent<SimpleCameraFollow>();
         if (follow == null)
