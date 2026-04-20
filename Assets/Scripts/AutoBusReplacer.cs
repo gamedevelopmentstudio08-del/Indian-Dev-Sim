@@ -200,6 +200,14 @@ public class AutoBusReplacer : MonoBehaviour
         cabin.GetComponent<MeshRenderer>().material.color = new Color(0.80f, 0.88f, 0.96f);
         Destroy(cabin.GetComponent<Collider>());
 
+        GameObject cabinShell = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        cabinShell.name = "Passenger Cabin Shell";
+        cabinShell.transform.SetParent(parent, false);
+        cabinShell.transform.localPosition = bodyLocalPosition + new Vector3(0f, 0.04f, -0.05f);
+        cabinShell.transform.localScale = new Vector3(2.0f, 1.02f, 3.45f);
+        cabinShell.GetComponent<MeshRenderer>().material.color = new Color(0.13f, 0.13f, 0.16f);
+        Destroy(cabinShell.GetComponent<Collider>());
+
         CreateWheel(parent, "FrontLeftWheel", new Vector3(-wheelHalfTrack, wheelHeight, frontWheelZ));
         CreateWheel(parent, "FrontRightWheel", new Vector3(wheelHalfTrack, wheelHeight, frontWheelZ));
         CreateWheel(parent, "RearLeftWheel", new Vector3(-wheelHalfTrack, wheelHeight, rearWheelZ));
@@ -319,6 +327,11 @@ public class AutoBusReplacer : MonoBehaviour
 
     private void StabilizeBody(Rigidbody body, Transform targetTransform)
     {
+        if (body == null || body.isKinematic)
+        {
+            return;
+        }
+
         Vector3 localAngularVelocity = targetTransform.InverseTransformDirection(body.angularVelocity);
         Vector3 dampingTorque = new Vector3(-localAngularVelocity.x * angularDamping, 0f, -localAngularVelocity.z * angularDamping);
         body.AddRelativeTorque(dampingTorque, ForceMode.Acceleration);

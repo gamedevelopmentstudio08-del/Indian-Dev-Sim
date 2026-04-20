@@ -145,8 +145,11 @@ public class SimpleBusController : MonoBehaviour
         rb.MovePosition(rb.position + moveStep);
         rb.MoveRotation(Quaternion.Euler(0f, currentYaw, 0f));
 
-        rb.velocity = Vector3.zero;
-        rb.angularVelocity = Vector3.zero;
+        if (!rb.isKinematic)
+        {
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
     }
 
     private void DriveWithWheelColliders()
@@ -357,8 +360,11 @@ public class SimpleBusController : MonoBehaviour
 
     private void ReloadBus()
     {
-        rb.velocity = Vector3.zero;
-        rb.angularVelocity = Vector3.zero;
+        if (!rb.isKinematic)
+        {
+            rb.velocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
         transform.SetPositionAndRotation(spawnPosition, spawnRotation);
         currentForwardSpeed = 0f;
         currentYaw = spawnRotation.eulerAngles.y;

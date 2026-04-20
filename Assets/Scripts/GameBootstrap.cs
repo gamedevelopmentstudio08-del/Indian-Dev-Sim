@@ -244,12 +244,29 @@ public class GameBootstrap : MonoBehaviour
         main.maxParticles = 1800;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
         main.startColor = new ParticleSystem.MinMaxGradient(
-            new Color(1f, 0.42f, 0.66f, 0.92f),
-            new Color(1f, 0.72f, 0.84f, 0.86f)
+            new Color(0.80f, 0.86f, 0.91f, 0.58f),
+            new Color(0.68f, 0.76f, 0.82f, 0.42f)
         );
 
         ParticleSystem.EmissionModule emission = rainSystem.emission;
         emission.rateOverTime = 0f;
+
+        ParticleSystem.ColorOverLifetimeModule colorOverLifetime = rainSystem.colorOverLifetime;
+        colorOverLifetime.enabled = true;
+        Gradient rainGradient = new Gradient();
+        rainGradient.SetKeys(
+            new[]
+            {
+                new GradientColorKey(new Color(0.92f, 0.95f, 0.97f), 0f),
+                new GradientColorKey(new Color(0.56f, 0.66f, 0.74f), 1f)
+            },
+            new[]
+            {
+                new GradientAlphaKey(0.52f, 0f),
+                new GradientAlphaKey(0.30f, 1f)
+            }
+        );
+        colorOverLifetime.color = rainGradient;
 
         ParticleSystem.ShapeModule shape = rainSystem.shape;
         shape.shapeType = ParticleSystemShapeType.Box;
@@ -264,7 +281,7 @@ public class GameBootstrap : MonoBehaviour
         renderer.renderMode = ParticleSystemRenderMode.Stretch;
         renderer.lengthScale = 2.4f;
         renderer.velocityScale = 0.12f;
-        renderer.material.color = new Color(1f, 0.48f, 0.70f, 0.90f);
+        renderer.material.color = new Color(0.80f, 0.86f, 0.91f, 0.55f);
 
         CreateWeatherAudioSystem(cam);
 
@@ -3205,16 +3222,16 @@ public class GameBootstrap : MonoBehaviour
     {
         Vector3[] seats =
         {
-            new Vector3(-0.58f, 0.55f, 1.55f),
-            new Vector3(0.58f, 0.55f, 1.55f),
-            new Vector3(-0.58f, 0.55f, 0.65f),
-            new Vector3(0.58f, 0.55f, 0.65f),
-            new Vector3(-0.58f, 0.55f, -0.25f),
-            new Vector3(0.58f, 0.55f, -0.25f),
-            new Vector3(-0.58f, 0.55f, -1.15f),
-            new Vector3(0.58f, 0.55f, -1.15f),
-            new Vector3(-0.50f, 0.55f, -2.00f),
-            new Vector3(0.50f, 0.55f, -2.00f)
+            new Vector3(-0.32f, 0.42f, 1.05f),
+            new Vector3(0.32f, 0.42f, 1.05f),
+            new Vector3(-0.32f, 0.42f, 0.35f),
+            new Vector3(0.32f, 0.42f, 0.35f),
+            new Vector3(-0.32f, 0.42f, -0.35f),
+            new Vector3(0.32f, 0.42f, -0.35f),
+            new Vector3(-0.32f, 0.42f, -1.05f),
+            new Vector3(0.32f, 0.42f, -1.05f),
+            new Vector3(-0.28f, 0.42f, -1.65f),
+            new Vector3(0.28f, 0.42f, -1.65f)
         };
 
         Color[] shirts =
@@ -3231,6 +3248,7 @@ public class GameBootstrap : MonoBehaviour
             passenger.transform.SetParent(busObject.transform, false);
             passenger.transform.localPosition = seats[i];
             passenger.transform.localRotation = Quaternion.Euler(0f, i % 2 == 0 ? 12f : -12f, 0f);
+            passenger.transform.localScale = Vector3.one * 0.8f;
 
             GameObject torso = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             torso.name = "Torso";
