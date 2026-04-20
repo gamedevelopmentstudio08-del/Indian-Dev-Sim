@@ -19,6 +19,8 @@ public class SimpleBusController : MonoBehaviour
     public float steeringReturnSpeed = 9f;
     public float highSpeedSteeringDamping = 4.5f;
     public float yawStability = 3f;
+    public float hillAssistTorque = 2600f;
+    public float hillAssistSpeedThreshold = 24f;
     public int currentGear = 0;
     public string gearText = "N";
 
@@ -31,14 +33,14 @@ public class SimpleBusController : MonoBehaviour
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        rb.mass = 2200f;
-        rb.drag = 0.22f;
-        rb.angularDrag = 4.5f;
+        rb.mass = 9800f;
+        rb.drag = 0.08f;
+        rb.angularDrag = 1.8f;
         rb.interpolation = RigidbodyInterpolation.Interpolate;
         rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
-        rb.centerOfMass = new Vector3(0f, -1.05f, 0f);
-        rb.maxAngularVelocity = 2.5f;
+        rb.centerOfMass = new Vector3(0f, -1.25f, 0f);
+        rb.maxAngularVelocity = 1.8f;
         wheelColliders = GetComponentsInChildren<WheelCollider>();
 
         foreach (WheelCollider wheel in wheelColliders)
@@ -85,7 +87,8 @@ public class SimpleBusController : MonoBehaviour
 
         if (throttle > 0f)
         {
-            rb.AddForce(transform.forward * speed, ForceMode.Acceleration);
+            float hillAssist = GetHillAssistMultiplier();
+            rb.AddForce(transform.forward * speed * hillAssist, ForceMode.Acceleration);
         }
         else if (throttle < 0f)
         {
@@ -118,6 +121,8 @@ public class SimpleBusController : MonoBehaviour
         {
             motorTorque *= 1.18f;
         }
+
+        motorTorque *= GetHillAssistMultiplier();
 
         for (int i = 0; i < wheelColliders.Length; i++)
         {
@@ -213,6 +218,19 @@ public class SimpleBusController : MonoBehaviour
         }
 
         rb.angularVelocity = new Vector3(0f, angularVelocity.y, 0f);
+    }
+
+    private float GetHillAssistMultiplier()
+    {
+        float uphillAlignment = Mathf.Max(0f, Vector3.Dot(transform.forward.normalized, Vector3.up));
+        float speedKmh = rb != null ? rb.velocity.magnitude * 3.6f : 0f;
+
+        if (throttle > 0f && speedKmh < hillAssistSpeedThreshold && uphillAlignment > 0.08f)
+        {
+            return 1f + hillAssistTorque / 10000f;
+        }
+
+        return 1f;
     }
 
     private void UpdateGear()

@@ -17,9 +17,9 @@ public class AutoBusReplacer : MonoBehaviour
     [SerializeField] private float rearWheelZ = -2.15f;
 
     [Header("Physics")]
-    [SerializeField] private float busMass = 3000f;
-    [SerializeField] private float busDrag = 0.5f;
-    [SerializeField] private float busAngularDrag = 2f;
+    [SerializeField] private float busMass = 9800f;
+    [SerializeField] private float busDrag = 0.08f;
+    [SerializeField] private float busAngularDrag = 1.8f;
     [SerializeField] private Vector3 centerOfMass = new Vector3(0f, -1.2f, 0f);
     [SerializeField] private float uprightForce = 10f;
     [SerializeField] private float angularDamping = 2.5f;
