@@ -28,10 +28,6 @@ public class SimpleBusController : MonoBehaviour
     public float hillAssistTorque = 2600f;
     public float hillAssistSpeedThreshold = 24f;
     public float hillMaxSpeedKmh = 55f;
-    public float groundSnapRayStartHeight = 8f;
-    public float groundSnapRayDistance = 40f;
-    public float groundSnapOffset = 0.72f;
-    public float maxGroundSnapSlope = 55f;
     public int currentGear = 0;
     public string gearText = "N";
     public float CurrentSpeedKmh => Mathf.Abs(currentForwardSpeed) * 3.6f;
@@ -45,7 +41,6 @@ public class SimpleBusController : MonoBehaviour
     private float currentYaw;
     private Vector3 spawnPosition;
     private Quaternion spawnRotation;
-    private readonly RaycastHit[] groundHits = new RaycastHit[16];
 
     private void Awake()
     {
@@ -147,13 +142,7 @@ public class SimpleBusController : MonoBehaviour
         currentYaw += turn;
 
         Vector3 moveStep = Quaternion.Euler(0f, currentYaw, 0f) * Vector3.forward * (currentForwardSpeed * Time.fixedDeltaTime);
-        Vector3 targetPosition = rb.position + moveStep;
-        if (TryResolveGroundSnap(targetPosition, out Vector3 snappedPosition))
-        {
-            targetPosition = snappedPosition;
-        }
-
-        rb.MovePosition(targetPosition);
+        rb.MovePosition(rb.position + moveStep);
         rb.MoveRotation(Quaternion.Euler(0f, currentYaw, 0f));
 
         if (!rb.isKinematic)
@@ -404,49 +393,6 @@ public class SimpleBusController : MonoBehaviour
             rb.angularVelocity *= 0.65f;
             rb.AddForce(impulseDirection * impactStrength * 1.4f, ForceMode.VelocityChange);
         }
-    }
-
-    private bool TryResolveGroundSnap(Vector3 desiredPosition, out Vector3 snappedPosition)
-    {
-        snappedPosition = desiredPosition;
-        Vector3 rayOrigin = desiredPosition + Vector3.up * Mathf.Max(1f, groundSnapRayStartHeight);
-        int count = Physics.RaycastNonAlloc(rayOrigin, Vector3.down, groundHits, Mathf.Max(2f, groundSnapRayDistance));
-        if (count <= 0)
-        {
-            return false;
-        }
-
-        bool found = false;
-        float bestY = float.NegativeInfinity;
-        for (int i = 0; i < count; i++)
-        {
-            RaycastHit hit = groundHits[i];
-            if (hit.collider == null)
-            {
-                continue;
-            }
-
-            float slope = Vector3.Angle(hit.normal, Vector3.up);
-            if (slope > maxGroundSnapSlope)
-            {
-                continue;
-            }
-
-            float candidateY = hit.point.y + groundSnapOffset;
-            if (!found || candidateY > bestY)
-            {
-                bestY = candidateY;
-                found = true;
-            }
-        }
-
-        if (!found)
-        {
-            return false;
-        }
-
-        snappedPosition.y = bestY;
-        return true;
     }
 
     private static bool IsKeyHeld(KeyCode key)
