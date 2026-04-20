@@ -124,7 +124,7 @@ public class GameBootstrap : MonoBehaviour
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.R))
+        if (Input.GetKeyDown(KeyCode.F5))
         {
             ReloadGame();
             return;
@@ -144,7 +144,7 @@ public class GameBootstrap : MonoBehaviour
             "Speed: " + speedKmh + " km/h\n" +
             "Gear: " + bus.gearText + "\n" +
             "Weather: " + weatherLabel + "\n" +
-            "W/S Drive  A/D Turn  Space Brake  R Reload";
+            "WASD or Arrows  Space Brake  R Reset Bus  C/1-4 Camera  F5 Reload";
 
         speedText.text = hudMessage;
     }
@@ -3407,11 +3407,9 @@ public class GameBootstrap : MonoBehaviour
             follow = cam.gameObject.AddComponent<SimpleCameraFollow>();
         }
 
-        follow.target = bus.transform;
-        follow.offset = new Vector3(0f, 3.6f, -8.5f);
-        follow.lookOffset = new Vector3(0f, 1.8f, 4.5f);
+        follow.SetTarget(bus.transform);
+        follow.SetView((int)SimpleCameraFollow.CameraView.Chase);
         follow.smoothness = 7.5f;
-        follow.rotateWithBus = true;
         follow.SnapToTarget();
     }
 
@@ -3434,14 +3432,14 @@ public class GameBootstrap : MonoBehaviour
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
         panelRect.anchoredPosition = new Vector2(18f, -18f);
-        panelRect.sizeDelta = new Vector2(360f, 125f);
+        panelRect.sizeDelta = new Vector2(470f, 145f);
 
         GameObject textObject = new GameObject("Speed Text");
         textObject.transform.SetParent(panelObject.transform, false);
 
         speedText = textObject.AddComponent<Text>();
         speedText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        speedText.fontSize = 26;
+        speedText.fontSize = 23;
         speedText.color = Color.white;
         speedText.text = "Speed: 0 km/h";
 
@@ -3450,6 +3448,6 @@ public class GameBootstrap : MonoBehaviour
         rect.anchorMax = new Vector2(0f, 1f);
         rect.pivot = new Vector2(0f, 1f);
         rect.anchoredPosition = new Vector2(16f, -12f);
-        rect.sizeDelta = new Vector2(330f, 110f);
+        rect.sizeDelta = new Vector2(440f, 130f);
     }
 }

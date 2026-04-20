@@ -2,18 +2,61 @@ using UnityEngine;
 
 public class SimpleCameraFollow : MonoBehaviour
 {
+    public enum CameraView
+    {
+        Chase = 0,
+        Driver = 1,
+        Side = 2,
+        Overhead = 3
+    }
+
     public Transform target;
+    public CameraView currentView = CameraView.Chase;
     public Vector3 offset = new Vector3(0f, 3.6f, -8.5f);
     public Vector3 lookOffset = new Vector3(0f, 1.8f, 4.5f);
     public float smoothness = 7.5f;
     public bool rotateWithBus = true;
     public float perspectiveFieldOfView = 58f;
+    public float driverFieldOfView = 66f;
+    public float sideFieldOfView = 62f;
+    public float overheadFieldOfView = 72f;
+    public KeyCode cycleViewKey = KeyCode.C;
+    public KeyCode chaseViewKey = KeyCode.Alpha1;
+    public KeyCode driverViewKey = KeyCode.Alpha2;
+    public KeyCode sideViewKey = KeyCode.Alpha3;
+    public KeyCode overheadViewKey = KeyCode.Alpha4;
 
     private bool hasSnappedToTarget;
+    private Camera cameraComponent;
 
-    private void Start()
+    private void Awake()
     {
-        SnapToTarget();
+        cameraComponent = GetComponent<Camera>();
+        ApplyViewSettings(currentView);
+    }
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(cycleViewKey))
+        {
+            SetView((int)currentView + 1);
+        }
+        else if (Input.GetKeyDown(chaseViewKey))
+        {
+            SetView((int)CameraView.Chase);
+        }
+        else if (Input.GetKeyDown(driverViewKey))
+        {
+            SetView((int)CameraView.Driver);
+        }
+        else if (Input.GetKeyDown(sideViewKey))
+        {
+            SetView((int)CameraView.Side);
+        }
+        else if (Input.GetKeyDown(overheadViewKey))
+        {
+            SetView((int)CameraView.Overhead);
+        }
     }
 
     private void LateUpdate()
@@ -23,8 +66,8 @@ public class SimpleCameraFollow : MonoBehaviour
             return;
         }
 
-        Vector3 targetPosition = rotateWithBus ? target.TransformPoint(offset) : target.position + offset;
-        Vector3 lookPoint = rotateWithBus ? target.TransformPoint(lookOffset) : target.position + lookOffset;
+        Vector3 targetPosition = GetTargetPosition();
+        Vector3 lookPoint = GetLookPoint();
 
         if (!hasSnappedToTarget)
         {
@@ -36,10 +79,29 @@ public class SimpleCameraFollow : MonoBehaviour
             transform.position = Vector3.Lerp(transform.position, targetPosition, smoothness * Time.deltaTime);
         }
 
-        transform.rotation = Quaternion.Slerp(
-            transform.rotation,
-            Quaternion.LookRotation(lookPoint - transform.position, Vector3.up),
-            smoothness * Time.deltaTime);
+        Vector3 lookDirection = lookPoint - transform.position;
+        if (lookDirection.sqrMagnitude > 0.001f)
+        {
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation,
+                Quaternion.LookRotation(lookDirection, Vector3.up),
+                smoothness * Time.deltaTime);
+        }
+    }
+
+    public void SetTarget(Transform newTarget)
+    {
+        target = newTarget;
+        hasSnappedToTarget = false;
+    }
+
+    public void SetView(int viewIndex)
+    {
+        int normalizedIndex = ((viewIndex % 4) + 4) % 4;
+        currentView = (CameraView)normalizedIndex;
+        ApplyViewSettings(currentView);
+        hasSnappedToTarget = false;
+        SnapToTarget();
     }
 
     public void SnapToTarget()
@@ -49,10 +111,65 @@ public class SimpleCameraFollow : MonoBehaviour
             return;
         }
 
-        Vector3 targetPosition = rotateWithBus ? target.TransformPoint(offset) : target.position + offset;
-        Vector3 lookPoint = rotateWithBus ? target.TransformPoint(lookOffset) : target.position + lookOffset;
+        Vector3 targetPosition = GetTargetPosition();
+        Vector3 lookPoint = GetLookPoint();
         transform.position = targetPosition;
-        transform.rotation = Quaternion.LookRotation(lookPoint - transform.position, Vector3.up);
+        Vector3 lookDirection = lookPoint - transform.position;
+        if (lookDirection.sqrMagnitude > 0.001f)
+        {
+            transform.rotation = Quaternion.LookRotation(lookDirection, Vector3.up);
+        }
+
         hasSnappedToTarget = true;
+    }
+
+    private Vector3 GetTargetPosition()
+    {
+        return rotateWithBus ? target.TransformPoint(offset) : target.position + offset;
+    }
+
+    private Vector3 GetLookPoint()
+    {
+        return rotateWithBus ? target.TransformPoint(lookOffset) : target.position + lookOffset;
+    }
+
+    private void ApplyViewSettings(CameraView view)
+    {
+        switch (view)
+        {
+            case CameraView.Driver:
+                offset = new Vector3(0f, 2.15f, 1.9f);
+                lookOffset = new Vector3(0f, 2.1f, 8.5f);
+                rotateWithBus = true;
+                SetFieldOfView(driverFieldOfView);
+                break;
+            case CameraView.Side:
+                offset = new Vector3(5.8f, 3.1f, 0.2f);
+                lookOffset = new Vector3(0f, 1.8f, 1.8f);
+                rotateWithBus = true;
+                SetFieldOfView(sideFieldOfView);
+                break;
+            case CameraView.Overhead:
+                offset = new Vector3(0f, 16f, -2f);
+                lookOffset = new Vector3(0f, 0.8f, 6f);
+                rotateWithBus = false;
+                SetFieldOfView(overheadFieldOfView);
+                break;
+            case CameraView.Chase:
+            default:
+                offset = new Vector3(0f, 3.6f, -8.5f);
+                lookOffset = new Vector3(0f, 1.8f, 4.5f);
+                rotateWithBus = true;
+                SetFieldOfView(perspectiveFieldOfView);
+                break;
+        }
+    }
+
+    private void SetFieldOfView(float value)
+    {
+        if (cameraComponent != null)
+        {
+            cameraComponent.fieldOfView = value;
+        }
     }
 }

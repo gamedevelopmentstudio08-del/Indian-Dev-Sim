@@ -251,11 +251,11 @@ public class AutoBusReplacer : MonoBehaviour
                 continue;
             }
 
-            ScaleFloatField(behaviour, "rotationSpeed", 1.08f, 24f);
-            ScaleFloatField(behaviour, "wheelSteerAngle", 1.08f, 8.5f);
-            ScaleFloatField(behaviour, "highSpeedWheelSteerAngle", 1.1f, 3.2f);
+            ScaleFloatField(behaviour, "rotationSpeed", 1.08f, 30f);
+            ScaleFloatField(behaviour, "wheelSteerAngle", 1.08f, 10.5f);
+            ScaleFloatField(behaviour, "highSpeedWheelSteerAngle", 1.1f, 4.5f);
             ScaleFloatField(behaviour, "steeringStrength", 1.05f, 48f);
-            ScaleFloatField(behaviour, "steeringResponse", 1.1f, 8.5f);
+            ScaleFloatField(behaviour, "steeringResponse", 1.1f, 10.5f);
             ScaleFloatField(behaviour, "steeringAtMaxSpeed", 1.05f, 0.55f);
             SetFloatFieldIfExists(behaviour, "linearDrag", Mathf.Max(GetFloatFieldOrDefault(behaviour, "linearDrag", busDrag), busDrag));
             SetFloatFieldIfExists(behaviour, "yawStability", Mathf.Max(GetFloatFieldOrDefault(behaviour, "yawStability", 3f), 3.2f));
