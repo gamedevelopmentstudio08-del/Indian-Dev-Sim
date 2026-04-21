@@ -53,7 +53,7 @@ public class AutoFbxImporter : AssetPostprocessor
         }
 
         string name = Path.GetFileNameWithoutExtension(assetPath);
-        Category category = Categorize(name);
+        Category category = Categorize(name, assetPath);
         if (category == Category.None)
         {
             return;
@@ -106,7 +106,35 @@ public class AutoFbxImporter : AssetPostprocessor
 
     private static Category Categorize(string assetName)
     {
+        return Categorize(assetName, null);
+    }
+
+    private static Category Categorize(string assetName, string path)
+    {
         string n = assetName.ToLowerInvariant();
+
+        // Path-based categorization so users can drop assets into folders without renaming.
+        if (!string.IsNullOrEmpty(path))
+        {
+            string p = path.Replace('\\', '/').ToLowerInvariant();
+            if (p.Contains("/imported/buses/") || p.Contains("/imported/bus/") || p.Contains("/busmodels/") || p.Contains("/buses/"))
+            {
+                return Category.BusModels;
+            }
+            if (p.Contains("/imported/buildings/") || p.Contains("/buildings/"))
+            {
+                return Category.Buildings;
+            }
+            if (p.Contains("/imported/trees/") || p.Contains("/trees/"))
+            {
+                return Category.Trees;
+            }
+            if (p.Contains("/imported/busstops/") || p.Contains("/busstops/") || p.Contains("/bus_stops/"))
+            {
+                return Category.BusStops;
+            }
+        }
+
         if (n.Contains("busstop") || n.Contains("bus_stop") || n.Contains("stop"))
         {
             return Category.BusStops;
