@@ -1,0 +1,4564 @@
+using System;
+using System.Collections.Generic;
+using BusSimulator.UI;
+using TMPro;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
+using UnityEngine.SceneManagement;
+using Random = UnityEngine.Random;
+
+public class GameBootstrap : MonoBehaviour
+{
+    private const string BusLayerName = "Bus";
+    private const string TrafficLayerName = "Traffic";
+    private const string EnvironmentLayerName = "Environment";
+    private const string GroundLayerName = "Ground";
+    private const float CityRoadSurfaceY = 0.04f;
+    private const float CityRoadWidth = 20f;
+    private const float CityRoadEdgeOffset = 9.65f;
+    private const float CityLaneOffset = 4.2f;
+    private const float MainRoadTreeOffset = 15.8f;
+    private const float CrossRoadTreeOffset = 15.8f;
+    private const float BranchRoadTreeOffset = 15.8f;
+    private const float ShortRoadTreeOffset = 13.2f;
+    private const float TrafficLightRoadsidePadding = 2.2f;
+    private const float TrafficLightCornerPadding = 1.6f;
+    private const float MountainLaneOffset = 2f;
+    private const float TransitionStartZ = 500f;
+    private const float TransitionEndZ = 620f;
+    private const float MaxFlatRoadSlopeAngle = 5f;
+    private const float MaxClimbRoadSlopeAngle = 25f;
+    private const float FlatRoadHeightTolerance = 0.35f;
+    private const float FlatRoadSampleOffset = 5f;
+    private const float MountainRoadSpacing = 12f;
+    private const float MountainRoadBankLimit = 7f;
+    private const float MountainRoadRerouteStep = 14f;
+    private const float MountainRoadRerouteRange = 56f;
+    private const float MountainRoadCrossSlopeLimit = 4.8f;
+    private const float MountainRoadGuardRailHeight = 0.6f;
+    private const float MountainRoadEdgeDropThreshold = 2.2f;
+    private const float ConnectorBridgeDeckThickness = 0.08f;
+    private const float ConnectorBridgeRailHeight = 0.9f;
+    private const float ConnectorBridgeSupportSpacing = 42f;
+    private const float ConnectorBridgeSupportWidth = 1.25f;
+    private const float ConnectorBridgeDebugSpacing = 24f;
+    private const float HillEntryFlattenRadius = 18f;
+    private const float FlatEntrySlopeTolerance = 1f;
+
+    private enum WeatherTimePreset
+    {
+        MorningSunny,
+        NoonSunny,
+        EveningSunny,
+        NightClear,
+        RainyDay,
+        ThunderstormNight
+    }
+
+    private enum WeatherCondition
+    {
+        Clear,
+        Rain,
+        Thunderstorm
+    }
+
+    private struct WeatherSettings
+    {
+        public string label;
+        public float lightIntensity;
+        public Color skyColor;
+        public Color fogColor;
+        public float fogDensity;
+        public Vector3 lightRotation;
+        public float rainEmissionRate;
+        public float rainAudioVolume;
+        public bool thunderstormActive;
+        public float wetness;
+    }
+
+    private SimpleBusController bus;
+    private Text speedText;
+    private Image hudPanel;
+    private GameObject legacyHudCanvasObject;
+    private Light sunLight;
+    private Light lightningLight;
+    private ParticleSystem rainSystem;
+    private AudioSource rainAudioSource;
+    private AudioSource thunderAudioSource;
+    private AudioClip rainLoopClip;
+    private AudioClip thunderClip;
+    private float nextWeatherChangeTime;
+    private float nextLightningTime;
+    private float lightningFlashEndTime;
+    private bool thunderstormActive;
+    private float timeOfDayHours;
+    private WeatherCondition currentCondition = WeatherCondition.Clear;
+    private WeatherSettings currentWeather;
+    private WeatherSettings targetWeather;
+    private PhysicMaterial roadPhysicsMaterial;
+    private Material asphaltDryMaterial;
+    private Material asphaltWetMaterial;
+    private Material asphaltBridgeMaterial;
+    private readonly List<Renderer> roadSurfaceRenderers = new List<Renderer>();
+    private float appliedWetness = -1f;
+    private Terrain mountainTerrain;
+    private Vector3 cityBusStartPosition = new Vector3(0f, 1.5f, -430f);
+    private Quaternion cityBusStartRotation = Quaternion.identity;
+    private string weatherLabel = "Morning / Sunny";
+    private string hudMessage = "Speed: 0 km/h\nGear: N\nWeather: Morning / Sunny";
+    private const float LongRoadStartZ = 500f;
+    private const float LongRoadEndZ = 5800f;
+    private const float LongRoadSegmentLength = 500f;
+
+    [Header("Weather Cycle")]
+    public float weatherChangeIntervalSeconds = 180f;
+
+    [Header("Time Of Day")]
+    [Tooltip("Seconds per full 24h cycle.")]
+    public float dayLengthSeconds = 600f;
+    [Range(0f, 24f)]
+    public float startTimeOfDayHours = 8f;
+    [Tooltip("How quickly lighting/rain blend to the new target.")]
+    public float weatherBlendSpeed = 0.7f;
+
+    [Header("Imported Prefabs (Optional)")]
+    public bool useImportedEnvironmentPrefabs = true;
+    public bool useImportedBusStops = true;
+    public bool useAutoGeneratedMenuUi = false;
+    [Header("Bus Spawn")]
+    public string busSpawnPointName = "BusSpawnPoint";
+    [Header("Long Distance Route")]
+    public bool enableLongDistanceRoad = true;
+    private GameObject[] importedBuildingPrefabs;
+    private GameObject[] importedTreePrefabs;
+    private GameObject[] importedBusStopPrefabs;
+    private Vector3 hillStopWorldPosition = Vector3.zero;
+
+    private void Start()
+    {
+        BuildScene();
+    }
+
+    private void Update()
+    {
+        if (IsKeyDown(KeyCode.F5))
+        {
+            ReloadGame();
+            return;
+        }
+
+        UpdateTimeOfDayAndWeather();
+        UpdateStormEffects();
+
+        if (bus == null || speedText == null)
+        {
+            return;
+        }
+
+        int speedKmh = Mathf.RoundToInt(bus.CurrentSpeedKmh);
+        hudMessage =
+            "Speed: " + speedKmh + " km/h\n" +
+            "Gear: " + bus.gearText + "\n" +
+            "Weather: " + weatherLabel + "\n" +
+            "WASD or Arrows  Space Brake  R Reset Bus  C/1-4 Camera  F5 Reload";
+
+        speedText.text = hudMessage;
+    }
+
+    private void ReloadGame()
+    {
+        Scene currentScene = SceneManager.GetActiveScene();
+        SceneManager.LoadScene(currentScene.buildIndex);
+    }
+
+    private static bool IsKeyDown(KeyCode key)
+    {
+        if (Input.GetKeyDown(key))
+        {
+            return true;
+        }
+
+#if ENABLE_INPUT_SYSTEM
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard == null)
+        {
+            return false;
+        }
+
+        switch (key)
+        {
+            case KeyCode.F5: return keyboard.f5Key.wasPressedThisFrame;
+            default: return false;
+        }
+#else
+        return false;
+#endif
+    }
+
+    private void BuildScene()
+    {
+        EnsureRoadAssets();
+        CacheImportedPrefabs();
+        CreateLight();
+        CreateRoad();
+        CreateBusStops();
+        CreateSparseBuildings();
+        CreateTrafficLights();
+        CreateBus();
+        CreateMovingDemoVehicle();
+        SetupCamera();
+        CreateWeatherSystem();
+        if (!HasManualMenuUi())
+        {
+            CreateHud();
+            if (useAutoGeneratedMenuUi)
+            {
+                CreateRuntimeUiSystem();
+            }
+        }
+    }
+
+    private static bool HasManualMenuUi()
+    {
+        if (GameObject.Find("AAA UI") != null)
+        {
+            return true;
+        }
+
+        return UnityEngine.Object.FindObjectOfType<UIScreenManager>() != null;
+    }
+
+    private void CacheImportedPrefabs()
+    {
+        if (!useImportedEnvironmentPrefabs && !useImportedBusStops)
+        {
+            return;
+        }
+
+        importedBuildingPrefabs = Resources.LoadAll<GameObject>("Auto/Buildings");
+        importedTreePrefabs = Resources.LoadAll<GameObject>("Auto/Trees");
+        importedBusStopPrefabs = Resources.LoadAll<GameObject>("Auto/BusStops");
+    }
+
+    private void CreateLight()
+    {
+        sunLight = FindObjectOfType<Light>();
+        if (sunLight != null)
+        {
+            return;
+        }
+
+        GameObject lightObject = new GameObject("Directional Light");
+        sunLight = lightObject.AddComponent<Light>();
+        sunLight.type = LightType.Directional;
+        sunLight.intensity = 1f;
+        lightObject.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+    }
+
+    private void CreateWeatherSystem()
+    {
+        Camera cam = Camera.main;
+        GameObject rainObject = new GameObject("Rain Weather");
+        if (cam != null)
+        {
+            rainObject.transform.SetParent(cam.transform, false);
+            rainObject.transform.localPosition = new Vector3(0f, 16f, 12f);
+        }
+        else
+        {
+            rainObject.transform.position = new Vector3(0f, 20f, 0f);
+        }
+
+        rainSystem = rainObject.AddComponent<ParticleSystem>();
+        ParticleSystem.MainModule main = rainSystem.main;
+        main.loop = true;
+        main.startLifetime = 1.2f;
+        main.startSpeed = 28f;
+        main.startSize = 0.045f;
+        main.maxParticles = 1800;
+        main.simulationSpace = ParticleSystemSimulationSpace.World;
+        main.startColor = new ParticleSystem.MinMaxGradient(
+            new Color(0.80f, 0.86f, 0.91f, 0.58f),
+            new Color(0.68f, 0.76f, 0.82f, 0.42f)
+        );
+
+        ParticleSystem.EmissionModule emission = rainSystem.emission;
+        emission.rateOverTime = 0f;
+
+        ParticleSystem.ColorOverLifetimeModule colorOverLifetime = rainSystem.colorOverLifetime;
+        colorOverLifetime.enabled = true;
+        Gradient rainGradient = new Gradient();
+        rainGradient.SetKeys(
+            new[]
+            {
+                new GradientColorKey(new Color(0.92f, 0.95f, 0.97f), 0f),
+                new GradientColorKey(new Color(0.56f, 0.66f, 0.74f), 1f)
+            },
+            new[]
+            {
+                new GradientAlphaKey(0.52f, 0f),
+                new GradientAlphaKey(0.30f, 1f)
+            }
+        );
+        colorOverLifetime.color = rainGradient;
+
+        ParticleSystem.ShapeModule shape = rainSystem.shape;
+        shape.shapeType = ParticleSystemShapeType.Box;
+        shape.scale = new Vector3(70f, 1f, 70f);
+
+        ParticleSystem.VelocityOverLifetimeModule velocity = rainSystem.velocityOverLifetime;
+        velocity.enabled = true;
+        velocity.space = ParticleSystemSimulationSpace.World;
+        velocity.y = new ParticleSystem.MinMaxCurve(-26f);
+
+        ParticleSystemRenderer renderer = rainSystem.GetComponent<ParticleSystemRenderer>();
+        renderer.renderMode = ParticleSystemRenderMode.Stretch;
+        renderer.lengthScale = 2.4f;
+        renderer.velocityScale = 0.12f;
+        renderer.material.color = new Color(0.80f, 0.86f, 0.91f, 0.55f);
+
+        CreateWeatherAudioSystem(cam);
+
+        if (weatherChangeIntervalSeconds > 90f)
+        {
+            weatherChangeIntervalSeconds = 90f;
+        }
+
+        timeOfDayHours = startTimeOfDayHours;
+        currentCondition = WeatherCondition.Clear;
+        currentWeather = GetTargetWeatherSettings(timeOfDayHours, currentCondition);
+        targetWeather = currentWeather;
+        ApplyWeatherInstant(currentWeather);
+        nextWeatherChangeTime = Time.time + Mathf.Max(15f, weatherChangeIntervalSeconds);
+    }
+
+    private void CreateWeatherAudioSystem(Camera cam)
+    {
+        GameObject audioRoot = new GameObject("Weather Audio");
+        if (cam != null)
+        {
+            audioRoot.transform.SetParent(cam.transform, false);
+            audioRoot.transform.localPosition = Vector3.zero;
+        }
+
+        rainAudioSource = audioRoot.AddComponent<AudioSource>();
+        rainAudioSource.playOnAwake = false;
+        rainAudioSource.loop = true;
+        rainAudioSource.spatialBlend = 0f;
+        rainAudioSource.volume = 0f;
+
+        thunderAudioSource = audioRoot.AddComponent<AudioSource>();
+        thunderAudioSource.playOnAwake = false;
+        thunderAudioSource.loop = false;
+        thunderAudioSource.spatialBlend = 0f;
+        thunderAudioSource.volume = 0.8f;
+
+        rainLoopClip = CreateProceduralWeatherClip("RainLoop", 4f, 0.085f, false);
+        thunderClip = CreateProceduralWeatherClip("Thunder", 2.4f, 0.35f, true);
+
+        GameObject lightningObject = new GameObject("Lightning Flash");
+        lightningObject.transform.SetParent(transform, false);
+        lightningLight = lightningObject.AddComponent<Light>();
+        lightningLight.type = LightType.Directional;
+        lightningLight.intensity = 0f;
+        lightningLight.color = Color.white;
+        lightningLight.shadows = LightShadows.None;
+        lightningObject.transform.rotation = Quaternion.Euler(18f, -35f, 0f);
+    }
+
+    private void UpdateTimeOfDayAndWeather()
+    {
+        float dt = Time.deltaTime;
+
+        if (dayLengthSeconds > 1f)
+        {
+            float hoursPerSecond = 24f / dayLengthSeconds;
+            timeOfDayHours = (timeOfDayHours + dt * hoursPerSecond) % 24f;
+        }
+
+        if (weatherChangeIntervalSeconds > 0f && Time.time >= nextWeatherChangeTime)
+        {
+            currentCondition = PickWeightedCondition(timeOfDayHours);
+            nextWeatherChangeTime = Time.time + weatherChangeIntervalSeconds;
+
+            if (currentCondition == WeatherCondition.Thunderstorm)
+            {
+                nextLightningTime = Time.time + Random.Range(1.5f, 4f);
+            }
+        }
+
+        targetWeather = GetTargetWeatherSettings(timeOfDayHours, currentCondition);
+        BlendWeatherTowardsTarget(dt);
+    }
+
+    private void UpdateStormEffects()
+    {
+        if (!thunderstormActive)
+        {
+            if (lightningLight != null)
+            {
+                lightningLight.intensity = 0f;
+            }
+
+            return;
+        }
+
+        if (Time.time >= nextLightningTime)
+        {
+            TriggerLightningFlash();
+            nextLightningTime = Time.time + Random.Range(4f, 9f);
+        }
+
+        if (lightningLight != null && Time.time >= lightningFlashEndTime)
+        {
+            lightningLight.intensity = 0f;
+        }
+    }
+
+    private WeatherCondition PickWeightedCondition(float currentHour)
+    {
+        bool isNight = currentHour < 5.5f || currentHour >= 19.5f;
+        WeatherCondition[] weighted = isNight
+            ? new[]
+            {
+                WeatherCondition.Clear,
+                WeatherCondition.Clear,
+                WeatherCondition.Rain,
+                WeatherCondition.Rain,
+                WeatherCondition.Thunderstorm,
+                WeatherCondition.Thunderstorm,
+                WeatherCondition.Thunderstorm
+            }
+            : new[]
+            {
+                WeatherCondition.Clear,
+                WeatherCondition.Clear,
+                WeatherCondition.Rain,
+                WeatherCondition.Rain,
+                WeatherCondition.Rain,
+                WeatherCondition.Thunderstorm
+            };
+
+        return weighted[Random.Range(0, weighted.Length)];
+    }
+
+    private void ApplyWeatherInstant(WeatherSettings settings)
+    {
+        thunderstormActive = settings.thunderstormActive;
+        weatherLabel = settings.label;
+
+        if (rainSystem != null)
+        {
+            ParticleSystem.EmissionModule emission = rainSystem.emission;
+            emission.rateOverTime = settings.rainEmissionRate;
+        }
+
+        if (rainAudioSource != null)
+        {
+            if (settings.rainEmissionRate > 1f)
+            {
+                if (rainLoopClip != null)
+                {
+                    rainAudioSource.clip = rainLoopClip;
+                }
+
+                if (!rainAudioSource.isPlaying && rainAudioSource.clip != null)
+                {
+                    rainAudioSource.Play();
+                }
+
+                rainAudioSource.volume = settings.rainAudioVolume;
+            }
+            else
+            {
+                rainAudioSource.Stop();
+                rainAudioSource.volume = 0f;
+            }
+        }
+
+        if (thunderAudioSource != null)
+        {
+            thunderAudioSource.volume = settings.thunderstormActive ? 0.9f : 0f;
+        }
+
+        if (!settings.thunderstormActive && lightningLight != null)
+        {
+            lightningLight.intensity = 0f;
+        }
+
+        ApplyLightAndSky(
+            settings.label,
+            settings.lightIntensity,
+            settings.skyColor,
+            settings.fogColor,
+            settings.fogDensity,
+            settings.lightRotation
+        );
+
+        UpdateRoadWetness(settings.wetness);
+    }
+
+    private void EnsureRoadAssets()
+    {
+        if (roadPhysicsMaterial == null)
+        {
+            roadPhysicsMaterial = new PhysicMaterial("RoadPhysics")
+            {
+                dynamicFriction = 1.2f,
+                staticFriction = 1.3f,
+                frictionCombine = PhysicMaterialCombine.Maximum,
+                bounciness = 0f,
+                bounceCombine = PhysicMaterialCombine.Minimum
+            };
+        }
+
+        if (asphaltDryMaterial == null)
+        {
+            asphaltDryMaterial = CreateAsphaltMaterial(new Color(0.12f, 0.12f, 0.13f), 0.0f, 0.25f, "AsphaltDry");
+        }
+
+        if (asphaltWetMaterial == null)
+        {
+            asphaltWetMaterial = CreateAsphaltMaterial(new Color(0.06f, 0.06f, 0.07f), 0.0f, 0.75f, "AsphaltWet");
+        }
+
+        if (asphaltBridgeMaterial == null)
+        {
+            asphaltBridgeMaterial = CreateAsphaltMaterial(new Color(0.08f, 0.08f, 0.09f), 0.0f, 0.35f, "AsphaltBridge");
+        }
+    }
+
+    private static Material CreateAsphaltMaterial(Color albedo, float metallic, float smoothness, string name)
+    {
+        Shader shader = Shader.Find("Standard");
+        Material mat = shader != null ? new Material(shader) : new Material(Shader.Find("Diffuse"));
+        mat.name = name;
+        mat.color = albedo;
+        if (mat.HasProperty("_Metallic"))
+        {
+            mat.SetFloat("_Metallic", metallic);
+        }
+        if (mat.HasProperty("_Glossiness"))
+        {
+            mat.SetFloat("_Glossiness", smoothness);
+        }
+        return mat;
+    }
+
+    private void UpdateRoadWetness(float wetness)
+    {
+        float clamped = Mathf.Clamp01(wetness);
+        if (Mathf.Abs(clamped - appliedWetness) < 0.05f)
+        {
+            return;
+        }
+
+        appliedWetness = clamped;
+        Material target = clamped >= 0.35f ? asphaltWetMaterial : asphaltDryMaterial;
+        if (target == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < roadSurfaceRenderers.Count; i++)
+        {
+            Renderer r = roadSurfaceRenderers[i];
+            if (r == null)
+            {
+                continue;
+            }
+
+            if (r.sharedMaterial == asphaltBridgeMaterial)
+            {
+                continue;
+            }
+
+            r.sharedMaterial = target;
+        }
+    }
+
+    private void BlendWeatherTowardsTarget(float dt)
+    {
+        float t = 1f - Mathf.Exp(-Mathf.Max(0.01f, weatherBlendSpeed) * dt);
+
+        currentWeather.lightIntensity = Mathf.Lerp(currentWeather.lightIntensity, targetWeather.lightIntensity, t);
+        currentWeather.skyColor = Color.Lerp(currentWeather.skyColor, targetWeather.skyColor, t);
+        currentWeather.fogColor = Color.Lerp(currentWeather.fogColor, targetWeather.fogColor, t);
+        currentWeather.fogDensity = Mathf.Lerp(currentWeather.fogDensity, targetWeather.fogDensity, t);
+        currentWeather.lightRotation = Vector3.Lerp(currentWeather.lightRotation, targetWeather.lightRotation, t);
+        currentWeather.rainEmissionRate = Mathf.Lerp(currentWeather.rainEmissionRate, targetWeather.rainEmissionRate, t);
+        currentWeather.rainAudioVolume = Mathf.Lerp(currentWeather.rainAudioVolume, targetWeather.rainAudioVolume, t);
+        currentWeather.wetness = Mathf.Lerp(currentWeather.wetness, targetWeather.wetness, t);
+        currentWeather.thunderstormActive = targetWeather.thunderstormActive;
+        currentWeather.label = targetWeather.label;
+
+        ApplyWeatherInstant(currentWeather);
+    }
+
+    private WeatherSettings GetTargetWeatherSettings(float hour, WeatherCondition condition)
+    {
+        bool isNight = hour < 5.5f || hour >= 19.5f;
+        bool isMorning = hour >= 5.5f && hour < 10.5f;
+        bool isNoon = hour >= 10.5f && hour < 16.5f;
+        bool isEvening = hour >= 16.5f && hour < 19.5f;
+
+        WeatherSettings settings = new WeatherSettings();
+
+        if (isMorning)
+        {
+            settings.lightIntensity = 0.82f;
+            settings.skyColor = new Color(0.82f, 0.84f, 0.76f);
+            settings.fogColor = new Color(0.52f, 0.55f, 0.48f);
+            settings.fogDensity = 0.0010f;
+            settings.lightRotation = new Vector3(28f, -28f, 0f);
+        }
+        else if (isNoon)
+        {
+            settings.lightIntensity = 1.08f;
+            settings.skyColor = new Color(0.64f, 0.79f, 0.96f);
+            settings.fogColor = new Color(0.44f, 0.53f, 0.58f);
+            settings.fogDensity = 0.0008f;
+            settings.lightRotation = new Vector3(62f, -30f, 0f);
+        }
+        else if (isEvening)
+        {
+            settings.lightIntensity = 0.55f;
+            settings.skyColor = new Color(0.82f, 0.60f, 0.44f);
+            settings.fogColor = new Color(0.34f, 0.28f, 0.26f);
+            settings.fogDensity = 0.0018f;
+            settings.lightRotation = new Vector3(18f, -42f, 0f);
+        }
+        else
+        {
+            settings.lightIntensity = 0.18f;
+            settings.skyColor = new Color(0.05f, 0.07f, 0.14f);
+            settings.fogColor = new Color(0.05f, 0.06f, 0.09f);
+            settings.fogDensity = 0.0013f;
+            settings.lightRotation = new Vector3(10f, -48f, 0f);
+        }
+
+        switch (condition)
+        {
+            case WeatherCondition.Clear:
+                settings.rainEmissionRate = 0f;
+                settings.rainAudioVolume = 0f;
+                settings.thunderstormActive = false;
+                settings.wetness = 0f;
+                settings.label = (isNight ? "Night" : isMorning ? "Morning" : isNoon ? "Noon" : "Evening") + " / Clear";
+                break;
+            case WeatherCondition.Rain:
+                settings.rainEmissionRate = isNight ? 820f : 740f;
+                settings.rainAudioVolume = 0.42f;
+                settings.thunderstormActive = false;
+                settings.wetness = 0.78f;
+                settings.label = (isNight ? "Night" : "Day") + " / Rain";
+                settings.lightIntensity *= 0.62f;
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.50f, 0.58f, 0.66f), 0.74f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.42f, 0.48f, 0.55f), 0.76f);
+                settings.fogDensity *= 2.6f;
+                break;
+            case WeatherCondition.Thunderstorm:
+                settings.rainEmissionRate = 1150f;
+                settings.rainAudioVolume = 0.70f;
+                settings.thunderstormActive = true;
+                settings.wetness = 1f;
+                settings.label = "Thunderstorm" + (isNight ? " / Night" : " / Day");
+                settings.lightIntensity *= 0.28f;
+                settings.skyColor = Color.Lerp(settings.skyColor, new Color(0.10f, 0.14f, 0.20f), isNight ? 0.9f : 0.75f);
+                settings.fogColor = Color.Lerp(settings.fogColor, new Color(0.12f, 0.18f, 0.24f), 0.85f);
+                settings.fogDensity *= 3.8f;
+                break;
+        }
+
+        return settings;
+    }
+
+    private void TriggerLightningFlash()
+    {
+        if (lightningLight == null)
+        {
+            return;
+        }
+
+        lightningLight.transform.rotation = Quaternion.Euler(Random.Range(10f, 20f), Random.Range(-50f, 50f), 0f);
+        lightningLight.intensity = Random.Range(4.8f, 7.2f);
+        lightningFlashEndTime = Time.time + Random.Range(0.08f, 0.16f);
+
+        if (thunderAudioSource != null && thunderClip != null)
+        {
+            thunderAudioSource.PlayOneShot(thunderClip, Random.Range(0.65f, 0.95f));
+        }
+    }
+
+    private AudioClip CreateProceduralWeatherClip(string name, float durationSeconds, float volumeScale, bool thunder)
+    {
+        const int sampleRate = 44100;
+        int sampleCount = Mathf.Max(1, Mathf.CeilToInt(durationSeconds * sampleRate));
+        float[] samples = new float[sampleCount];
+        float seed = Random.Range(0f, 1000f);
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float t = i / (float)sampleRate;
+            float baseNoise = Mathf.PerlinNoise(seed, t * (thunder ? 18f : 120f)) * 2f - 1f;
+            float detailNoise = Mathf.PerlinNoise(seed + 31.7f, t * (thunder ? 8f : 250f)) * 2f - 1f;
+            float rumble = thunder ? Mathf.Sin(t * 26f) * 0.6f + Mathf.Sin(t * 42f) * 0.25f : 0f;
+            float envelope = thunder ? Mathf.Exp(-t * 1.8f) : 1f;
+            samples[i] = Mathf.Clamp((baseNoise * 0.7f + detailNoise * 0.3f + rumble) * volumeScale * envelope, -1f, 1f);
+        }
+
+        AudioClip clip = AudioClip.Create(name, sampleCount, 1, sampleRate, false);
+        clip.SetData(samples, 0);
+        return clip;
+    }
+
+    private void ApplyLightAndSky(string label, float lightIntensity, Color skyColor, Color fogColor, float fogDensity, Vector3 lightRotation)
+    {
+        weatherLabel = label;
+        RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
+        RenderSettings.ambientSkyColor = skyColor;
+        RenderSettings.ambientEquatorColor = Color.Lerp(skyColor, Color.gray, 0.45f);
+        RenderSettings.ambientGroundColor = Color.Lerp(fogColor, Color.black, 0.45f);
+        RenderSettings.fog = true;
+        RenderSettings.fogMode = FogMode.ExponentialSquared;
+        RenderSettings.fogColor = fogColor;
+        RenderSettings.fogDensity = fogDensity;
+
+        if (sunLight != null)
+        {
+            sunLight.intensity = lightIntensity;
+            sunLight.color = Color.Lerp(Color.white, skyColor, 0.25f);
+            sunLight.transform.rotation = Quaternion.Euler(lightRotation);
+        }
+
+        Camera cam = Camera.main;
+        if (cam != null)
+        {
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = skyColor;
+        }
+    }
+
+    private void CreateRoad()
+    {
+        GameObject ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
+        ground.name = "Ground";
+        ground.transform.localScale = new Vector3(220f, 1f, 220f);
+        ground.GetComponent<Renderer>().material.color = new Color(0.56f, 0.78f, 0.42f);
+        ConfigureEnvironmentObject(ground);
+
+        GameObject road = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        road.name = "Main Road";
+        road.transform.position = new Vector3(0f, CityRoadSurfaceY, 0f);
+        road.transform.localScale = new Vector3(CityRoadWidth, 0.08f, 1000f);
+        road.GetComponent<Renderer>().material.color = new Color(0.12f, 0.12f, 0.13f);
+        ConfigureDriveableRoad(road);
+
+        GameObject crossRoad = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        crossRoad.name = "Second Road";
+        crossRoad.transform.position = new Vector3(0f, 0.04f, 25f);
+        crossRoad.transform.localScale = new Vector3(1000f, 0.08f, CityRoadWidth);
+        crossRoad.GetComponent<Renderer>().material.color = new Color(0.12f, 0.12f, 0.13f);
+        ConfigureDriveableRoad(crossRoad);
+
+        CreateCutRoad(-300f);
+        CreateCutRoad(0f);
+        CreateCutRoad(300f);
+        CreateBranchRoad(250f, -300f);
+        CreateBranchRoad(-250f, 0f);
+        CreateBranchRoad(250f, 300f);
+
+        CreateSideRoad("Left Cut Road", new Vector3(-58f, 0.045f, -250f), new Vector3(110f, 0.08f, CityRoadWidth));
+        CreateSideRoad("Right Cut Road", new Vector3(58f, 0.045f, -70f), new Vector3(110f, 0.08f, CityRoadWidth));
+        CreateSideRoad("Left Cut Road 2", new Vector3(-58f, 0.045f, 260f), new Vector3(110f, 0.08f, CityRoadWidth));
+
+        for (int i = -100; i <= 100; i++)
+        {
+            GameObject line = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            line.name = "Center Line";
+            line.transform.position = new Vector3(0f, 0.09f, i * 5f);
+            line.transform.localScale = new Vector3(0.18f, 0.04f, 2.4f);
+            line.GetComponent<Renderer>().material.color = Color.yellow;
+            RemoveCollider(line);
+        }
+
+        for (int i = -100; i <= 100; i++)
+        {
+            GameObject sideLineLeft = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideLineLeft.name = "Left Road Line";
+            sideLineLeft.transform.position = new Vector3(-CityRoadEdgeOffset, 0.1f, i * 5f);
+            sideLineLeft.transform.localScale = new Vector3(0.12f, 0.04f, 2.4f);
+            sideLineLeft.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideLineLeft);
+
+            GameObject sideLineRight = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideLineRight.name = "Right Road Line";
+            sideLineRight.transform.position = new Vector3(CityRoadEdgeOffset, 0.1f, i * 5f);
+            sideLineRight.transform.localScale = new Vector3(0.12f, 0.04f, 2.4f);
+            sideLineRight.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideLineRight);
+        }
+
+        for (int i = -100; i <= 100; i++)
+        {
+            GameObject crossLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            crossLine.name = "Second Road Center Line";
+            crossLine.transform.position = new Vector3(i * 5f, 0.11f, 25f);
+            crossLine.transform.localScale = new Vector3(2.4f, 0.04f, 0.18f);
+            crossLine.GetComponent<Renderer>().material.color = Color.yellow;
+            RemoveCollider(crossLine);
+
+            GameObject crossSideLineA = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            crossSideLineA.name = "Second Road Side Line";
+            crossSideLineA.transform.position = new Vector3(i * 5f, 0.12f, 25f - CityRoadEdgeOffset);
+            crossSideLineA.transform.localScale = new Vector3(2.4f, 0.04f, 0.12f);
+            crossSideLineA.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(crossSideLineA);
+
+            GameObject crossSideLineB = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            crossSideLineB.name = "Second Road Side Line";
+            crossSideLineB.transform.position = new Vector3(i * 5f, 0.12f, 25f + CityRoadEdgeOffset);
+            crossSideLineB.transform.localScale = new Vector3(2.4f, 0.04f, 0.12f);
+            crossSideLineB.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(crossSideLineB);
+        }
+
+        CreateSideRoadLines(-250f, -1);
+        CreateSideRoadLines(-70f, 1);
+        CreateSideRoadLines(260f, -1);
+        CreateRoadsideTrees();
+        CreateFlowerPatches();
+        if (enableLongDistanceRoad)
+        {
+            CreateLongDistanceRoadPath();
+        }
+        else
+        {
+            CreateMountainRoute();
+        }
+    }
+
+    private void CreateLongDistanceRoadPath()
+    {
+        if (LongRoadEndZ <= LongRoadStartZ)
+        {
+            return;
+        }
+
+        GameObject longGround = GameObject.CreatePrimitive(PrimitiveType.Plane);
+        longGround.name = "Long Route Ground";
+        longGround.transform.position = new Vector3(0f, 0f, (LongRoadStartZ + LongRoadEndZ) * 0.5f);
+        longGround.transform.localScale = new Vector3(80f, 1f, (LongRoadEndZ - LongRoadStartZ) / 10f * 0.5f);
+        Renderer groundRenderer = longGround.GetComponent<Renderer>();
+        if (groundRenderer != null)
+        {
+            groundRenderer.material.color = new Color(0.56f, 0.78f, 0.42f);
+        }
+        ConfigureEnvironmentObject(longGround);
+
+        int segmentCount = Mathf.CeilToInt((LongRoadEndZ - LongRoadStartZ) / LongRoadSegmentLength);
+        for (int i = 0; i < segmentCount; i++)
+        {
+            float segmentStartZ = LongRoadStartZ + i * LongRoadSegmentLength;
+            float segmentEndZ = Mathf.Min(segmentStartZ + LongRoadSegmentLength, LongRoadEndZ);
+            float segmentLength = segmentEndZ - segmentStartZ;
+            float segmentCenterZ = segmentStartZ + segmentLength * 0.5f;
+
+            GameObject roadSegment = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            roadSegment.name = "Long Main Road Segment";
+            roadSegment.transform.position = new Vector3(0f, CityRoadSurfaceY, segmentCenterZ);
+            roadSegment.transform.localScale = new Vector3(CityRoadWidth, 0.08f, segmentLength);
+            Renderer roadRenderer = roadSegment.GetComponent<Renderer>();
+            if (roadRenderer != null)
+            {
+                roadRenderer.material.color = new Color(0.12f, 0.12f, 0.13f);
+            }
+
+            ConfigureDriveableRoad(roadSegment);
+        }
+
+        for (float z = LongRoadStartZ; z <= LongRoadEndZ; z += 12f)
+        {
+            GameObject centerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            centerLine.name = "Long Road Center Line";
+            centerLine.transform.position = new Vector3(0f, 0.09f, z);
+            centerLine.transform.localScale = new Vector3(0.18f, 0.04f, 4f);
+            Renderer centerRenderer = centerLine.GetComponent<Renderer>();
+            if (centerRenderer != null)
+            {
+                centerRenderer.material.color = Color.yellow;
+            }
+
+            RemoveCollider(centerLine);
+
+            GameObject leftEdge = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            leftEdge.name = "Long Road Left Edge";
+            leftEdge.transform.position = new Vector3(-CityRoadEdgeOffset, 0.1f, z);
+            leftEdge.transform.localScale = new Vector3(0.12f, 0.04f, 4f);
+            Renderer leftRenderer = leftEdge.GetComponent<Renderer>();
+            if (leftRenderer != null)
+            {
+                leftRenderer.material.color = Color.white;
+            }
+
+            RemoveCollider(leftEdge);
+
+            GameObject rightEdge = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            rightEdge.name = "Long Road Right Edge";
+            rightEdge.transform.position = new Vector3(CityRoadEdgeOffset, 0.1f, z);
+            rightEdge.transform.localScale = new Vector3(0.12f, 0.04f, 4f);
+            Renderer rightRenderer = rightEdge.GetComponent<Renderer>();
+            if (rightRenderer != null)
+            {
+                rightRenderer.material.color = Color.white;
+            }
+
+            RemoveCollider(rightEdge);
+        }
+    }
+
+    private void CreateRoadsideTrees()
+    {
+        Random.InitState(4307);
+
+        for (float z = -455f; z <= 455f; z += 34f)
+        {
+            CreateTreeIfClear(new Vector3(-MainRoadTreeOffset, 0f, z), 0.95f);
+            CreateTreeIfClear(new Vector3(MainRoadTreeOffset, 0f, z + 11f), 0.9f);
+        }
+
+        float[] horizontalRoads = { -300f, 0f, 25f, 300f };
+        foreach (float roadZ in horizontalRoads)
+        {
+            for (float x = -455f; x <= 455f; x += 40f)
+            {
+                CreateTreeIfClear(new Vector3(x, 0f, roadZ - CrossRoadTreeOffset), 0.85f);
+                CreateTreeIfClear(new Vector3(x + 16f, 0f, roadZ + CrossRoadTreeOffset), 0.85f);
+            }
+        }
+
+        CreateRoadsideTreesForBranch(250f, -300f);
+        CreateRoadsideTreesForBranch(-250f, 0f);
+        CreateRoadsideTreesForBranch(250f, 300f);
+
+        CreateRoadsideTreesForShortRoad(-58f, -250f, -105f, -8f);
+        CreateRoadsideTreesForShortRoad(58f, -70f, 8f, 105f);
+        CreateRoadsideTreesForShortRoad(-58f, 260f, -105f, -8f);
+    }
+
+    private void CreateRoadsideTreesForBranch(float xCenter, float zCenter)
+    {
+        for (float z = zCenter - 455f; z <= zCenter + 455f; z += 40f)
+        {
+            CreateTreeIfClear(new Vector3(xCenter - BranchRoadTreeOffset, 0f, z), 0.8f);
+            CreateTreeIfClear(new Vector3(xCenter + BranchRoadTreeOffset, 0f, z + 14f), 0.8f);
+        }
+    }
+
+    private void CreateRoadsideTreesForShortRoad(float xCenter, float zCenter, float minX, float maxX)
+    {
+        for (float x = minX; x <= maxX; x += 28f)
+        {
+            CreateTreeIfClear(new Vector3(x, 0f, zCenter - ShortRoadTreeOffset), 0.75f);
+            CreateTreeIfClear(new Vector3(x + 12f, 0f, zCenter + ShortRoadTreeOffset), 0.75f);
+        }
+    }
+
+    private void CreateTreeIfClear(Vector3 position, float scale)
+    {
+        if (IsBuildingOnRoad(position.x, position.z, 2.4f * scale, 2.4f * scale, 1.5f))
+        {
+            return;
+        }
+
+        CreateTree(position, scale * Random.Range(0.88f, 1.18f));
+    }
+
+    private void CreateTree(Vector3 position, float scale)
+    {
+        bool isMountain = position.z > TransitionEndZ;
+        Vector3 colliderSize = isMountain ? new Vector3(1.3f * scale, 5.2f * scale, 1.3f * scale) : new Vector3(1.45f * scale, 4.8f * scale, 1.45f * scale);
+        Vector3 colliderCenter = isMountain ? new Vector3(0f, 2.6f * scale, 0f) : new Vector3(0f, 2.35f * scale, 0f);
+
+        if (useImportedEnvironmentPrefabs && importedTreePrefabs != null && importedTreePrefabs.Length > 0)
+        {
+            GameObject prefab = importedTreePrefabs[Random.Range(0, importedTreePrefabs.Length)];
+            if (prefab != null)
+            {
+                GameObject instance = Instantiate(prefab);
+                instance.name = isMountain ? "Imported Mountain Tree" : "Imported Tree";
+                instance.transform.position = position;
+                instance.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+                instance.transform.localScale = Vector3.one * Mathf.Clamp(scale, 0.6f, 1.4f);
+                BoxCollider importedCollider = instance.GetComponent<BoxCollider>();
+                if (importedCollider == null)
+                {
+                    importedCollider = instance.AddComponent<BoxCollider>();
+                }
+
+                importedCollider.center = colliderCenter;
+                importedCollider.size = colliderSize;
+                return;
+            }
+        }
+
+        GameObject root = new GameObject(isMountain ? "Mountain Tree" : "Roadside Tree");
+        root.transform.position = position;
+
+        GameObject lod0 = new GameObject("LOD0");
+        lod0.transform.SetParent(root.transform, false);
+
+        GameObject trunk = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        trunk.name = "Tree Trunk";
+        trunk.transform.SetParent(lod0.transform, false);
+        trunk.transform.localPosition = new Vector3(0f, 1.1f * scale, 0f);
+        trunk.transform.localScale = new Vector3(0.22f * scale, 1.1f * scale, 0.22f * scale);
+        trunk.GetComponent<Renderer>().material.color = new Color(0.36f, 0.22f, 0.11f);
+        RemoveCollider(trunk);
+
+        if (isMountain)
+        {
+            GameObject foliage0 = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            foliage0.name = "Foliage";
+            foliage0.transform.SetParent(lod0.transform, false);
+            foliage0.transform.localPosition = new Vector3(0f, 2.25f * scale, 0f);
+            foliage0.transform.localScale = new Vector3(1.05f * scale, 1.15f * scale, 1.05f * scale);
+            foliage0.GetComponent<Renderer>().material.color = new Color(0.10f, 0.38f, 0.16f);
+            RemoveCollider(foliage0);
+
+            GameObject foliage1 = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            foliage1.name = "Foliage";
+            foliage1.transform.SetParent(lod0.transform, false);
+            foliage1.transform.localPosition = new Vector3(0f, 3.15f * scale, 0f);
+            foliage1.transform.localScale = new Vector3(0.82f * scale, 0.95f * scale, 0.82f * scale);
+            foliage1.GetComponent<Renderer>().material.color = new Color(0.10f, 0.34f, 0.15f);
+            RemoveCollider(foliage1);
+        }
+        else
+        {
+            GameObject top = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            top.name = "Tree Top";
+            top.transform.SetParent(lod0.transform, false);
+            top.transform.localPosition = new Vector3(0f, 2.6f * scale, 0f);
+            top.transform.localScale = new Vector3(1.65f * scale, 1.35f * scale, 1.65f * scale);
+            top.GetComponent<Renderer>().material.color = new Color(0.13f, 0.48f, 0.18f);
+            RemoveCollider(top);
+        }
+
+        BoxCollider treeCollider = root.GetComponent<BoxCollider>();
+        if (treeCollider == null)
+        {
+            treeCollider = root.AddComponent<BoxCollider>();
+        }
+
+        treeCollider.center = colliderCenter;
+        treeCollider.size = colliderSize;
+
+        GameObject lod1 = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        lod1.name = "LOD1";
+        lod1.transform.SetParent(root.transform, false);
+        lod1.transform.localPosition = new Vector3(0f, 1.9f * scale, 0f);
+        lod1.transform.localScale = new Vector3(1.05f * scale, 2.1f * scale, 1.05f * scale);
+        lod1.GetComponent<Renderer>().material.color = isMountain ? new Color(0.11f, 0.34f, 0.16f) : new Color(0.13f, 0.48f, 0.18f);
+        RemoveCollider(lod1);
+
+        LODGroup lodGroup = root.AddComponent<LODGroup>();
+        Renderer[] lod0Renderers = lod0.GetComponentsInChildren<Renderer>(true);
+        Renderer[] lod1Renderers = lod1.GetComponentsInChildren<Renderer>(true);
+        LOD[] lods =
+        {
+            new LOD(0.55f, lod0Renderers),
+            new LOD(0.18f, lod1Renderers)
+        };
+        lodGroup.SetLODs(lods);
+        lodGroup.RecalculateBounds();
+    }
+
+    private void CreateFlowerPatches()
+    {
+        Random.InitState(9041);
+
+        for (int i = 0; i < 110; i++)
+        {
+            float x = Random.Range(-420f, 420f);
+            float z = Random.Range(-360f, 360f);
+            if (IsBuildingOnRoad(x, z, 2.5f, 2.5f, 2.5f))
+            {
+                continue;
+            }
+
+            if (Mathf.Abs(x) < 18f && Mathf.Abs(z) < 470f)
+            {
+                continue;
+            }
+
+            CreateFlowerCluster(new Vector3(x, 0f, z), Random.Range(2f, 4.5f));
+        }
+    }
+
+    private void CreateMountainFlowerClusters(List<Vector3> roadPoints)
+    {
+        if (roadPoints == null || roadPoints.Count == 0)
+        {
+            return;
+        }
+
+        Random.InitState(9155);
+        for (int i = 0; i < 45; i++)
+        {
+            Vector3 point = new Vector3(Random.Range(-500f, 500f), 0f, Random.Range(620f, 1830f));
+            float roadHeight;
+            if (DistanceToRoad(point, roadPoints, out roadHeight) < 18f)
+            {
+                continue;
+            }
+
+            point = SampleTerrainPoint(point);
+            CreateFlowerCluster(point, Random.Range(1.4f, 3.2f));
+        }
+    }
+
+    private void CreateFlowerCluster(Vector3 center, float radius)
+    {
+        int flowerCount = Random.Range(5, 10);
+        Color[] petals =
+        {
+            new Color(0.95f, 0.42f, 0.50f),
+            new Color(0.98f, 0.80f, 0.28f),
+            new Color(0.94f, 0.58f, 0.84f),
+            new Color(0.98f, 0.95f, 0.90f),
+            new Color(0.40f, 0.84f, 0.54f)
+        };
+
+        for (int i = 0; i < flowerCount; i++)
+        {
+            Vector2 offset = Random.insideUnitCircle * radius;
+            Vector3 flowerBase = new Vector3(center.x + offset.x, 0f, center.z + offset.y);
+            if (IsBuildingOnRoad(flowerBase.x, flowerBase.z, 1.2f, 1.2f, 1f))
+            {
+                continue;
+            }
+
+            GameObject stem = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            stem.name = "Flower Stem";
+            stem.transform.position = SampleTerrainPoint(flowerBase);
+            stem.transform.localScale = new Vector3(0.05f, Random.Range(0.18f, 0.34f), 0.05f);
+            stem.transform.position += Vector3.up * (stem.transform.localScale.y * 0.5f);
+            stem.GetComponent<Renderer>().material.color = new Color(0.16f, 0.56f, 0.24f);
+            RemoveCollider(stem);
+
+            GameObject bloom = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            bloom.name = "Flower Bloom";
+            bloom.transform.position = stem.transform.position + Vector3.up * (0.18f + stem.transform.localScale.y * 0.5f);
+            float bloomScale = Random.Range(0.12f, 0.22f);
+            bloom.transform.localScale = Vector3.one * bloomScale;
+            bloom.GetComponent<Renderer>().material.color = petals[Random.Range(0, petals.Length)];
+            RemoveCollider(bloom);
+        }
+    }
+
+    private void CreateMountainRoute()
+    {
+        Random.InitState(8124);
+
+        TerrainData terrainData = new TerrainData();
+        terrainData.heightmapResolution = 257;
+        terrainData.size = new Vector3(1200f, 260f, 1400f);
+        TerrainLayer mountainLayer = new TerrainLayer();
+        mountainLayer.diffuseTexture = CreateSolidTexture(new Color(0.42f, 0.58f, 0.36f));
+        mountainLayer.tileSize = new Vector2(18f, 18f);
+        terrainData.terrainLayers = new TerrainLayer[] { mountainLayer };
+
+        float[,] heights = GenerateMountainHeights(terrainData.heightmapResolution);
+        SmoothHeights(heights, 4);
+        terrainData.SetHeights(0, 0, heights);
+
+        GameObject terrainObject = Terrain.CreateTerrainGameObject(terrainData);
+        terrainObject.name = "Perlin Mountain Terrain";
+        terrainObject.transform.position = new Vector3(-600f, 0f, 500f);
+        mountainTerrain = terrainObject.GetComponent<Terrain>();
+        mountainTerrain.drawInstanced = true;
+        mountainTerrain.heightmapPixelError = 12f;
+        terrainObject.GetComponent<TerrainCollider>().terrainData = terrainData;
+        ConfigureEnvironmentObject(terrainObject);
+        LowerMountainTerrainForBridge(new Vector3(0f, 0f, TransitionEndZ + 40f), CityRoadSurfaceY - 3.2f);
+
+        RemoveSlopeRoadConnections();
+        Vector3 hillEntryPoint = FindFlatHillEntryPoint(new Vector3(0f, 0f, TransitionEndZ + 40f));
+        List<Vector3> bridgePath = ConnectCityRoadToHillBase(hillEntryPoint);
+
+        Vector3 mountainStart = bridgePath != null && bridgePath.Count > 0 ? bridgePath[bridgePath.Count - 1] : new Vector3(0f, CityRoadSurfaceY, TransitionEndZ + 60f);
+        List<Vector3> mountainRoad = CreateSplineMountainRoad(mountainStart);
+
+        if (mountainTerrain != null && mountainRoad != null && mountainRoad.Count > 2)
+        {
+            hillStopWorldPosition = mountainRoad[mountainRoad.Count - 1];
+            CarveRoadIntoTerrain(mountainTerrain.terrainData, mountainRoad, CityRoadWidth * 0.5f, CityRoadWidth * 0.5f + 8f);
+            CreateRoadMeshStrip(mountainRoad, CityRoadWidth, "Mountain Road Mesh", asphaltDryMaterial, true);
+            CreateMountainRoadVisuals(mountainRoad, "Mountain Climb Road", true, false);
+            CreateMountainSafetyWalls(mountainRoad);
+            CreateMountainDemoVehicles(mountainRoad);
+        }
+
+        List<Vector3> allRoadPoints = new List<Vector3>();
+        if (bridgePath != null) allRoadPoints.AddRange(bridgePath);
+        if (mountainRoad != null) allRoadPoints.AddRange(mountainRoad);
+        CreateMountainEnvironmentDetails(allRoadPoints);
+    }
+
+    private void CreateBusStops()
+    {
+        if (!useImportedBusStops)
+        {
+            return;
+        }
+
+        Vector3 cityStop = cityBusStartPosition + new Vector3(-10f, 0f, 18f);
+        CreateBusStopAt(cityStop, "CITY STOP");
+
+        if (hillStopWorldPosition.z > TransitionEndZ + 40f)
+        {
+            Vector3 hillStop = hillStopWorldPosition + new Vector3(10f, 0f, -8f);
+            CreateBusStopAt(hillStop, "HILL STOP");
+        }
+    }
+
+    private void CreateBusStopAt(Vector3 position, string label)
+    {
+        Vector3 place = position;
+        if (mountainTerrain != null && place.z > TransitionStartZ)
+        {
+            place = SampleTerrainPoint(place);
+        }
+
+        if (importedBusStopPrefabs != null && importedBusStopPrefabs.Length > 0)
+        {
+            GameObject prefab = importedBusStopPrefabs[Random.Range(0, importedBusStopPrefabs.Length)];
+            if (prefab != null)
+            {
+                GameObject instance = Instantiate(prefab);
+                instance.name = "Bus Stop";
+                instance.transform.position = place;
+                instance.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+                return;
+            }
+        }
+
+        GameObject root = new GameObject("Bus Stop");
+        root.transform.position = place;
+
+        GameObject pole = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        pole.name = "Stop Pole";
+        pole.transform.SetParent(root.transform, false);
+        pole.transform.localPosition = new Vector3(0f, 1.5f, 0f);
+        pole.transform.localScale = new Vector3(0.12f, 1.5f, 0.12f);
+        pole.GetComponent<Renderer>().material.color = new Color(0.18f, 0.18f, 0.18f);
+        RemoveCollider(pole);
+
+        CreateMountainSign(place + new Vector3(0f, 0.7f, 0f), label);
+    }
+
+    private List<Vector3> CreateSplineMountainRoad(Vector3 startPoint)
+    {
+        if (mountainTerrain == null)
+        {
+            return new List<Vector3>();
+        }
+
+        TerrainData terrainData = mountainTerrain.terrainData;
+        Vector3 terrainPos = mountainTerrain.transform.position;
+        Vector3 terrainSize = terrainData.size;
+
+        float minX = terrainPos.x + 60f;
+        float maxX = terrainPos.x + terrainSize.x - 60f;
+        float minZ = Mathf.Max(TransitionEndZ + 20f, terrainPos.z + 40f);
+        float maxZ = terrainPos.z + terrainSize.z - 40f;
+
+        float targetEndZ = Mathf.Clamp(terrainPos.z + terrainSize.z - 110f, minZ + 120f, maxZ);
+        float centerZ = Mathf.Clamp(startPoint.z + 260f, minZ + 60f, maxZ - 200f);
+
+        // Switchback-style control points (XZ). Y is assigned by an elevation profile + smoothing.
+        List<Vector3> controls = new List<Vector3>
+        {
+            new Vector3(startPoint.x, 0f, Mathf.Clamp(startPoint.z, minZ, maxZ)),
+            new Vector3(startPoint.x, 0f, Mathf.Clamp(startPoint.z + 70f, minZ, maxZ)),
+            new Vector3(Mathf.Clamp(-240f, minX, maxX), 0f, Mathf.Clamp(centerZ + 60f, minZ, maxZ)),
+            new Vector3(Mathf.Clamp(260f, minX, maxX), 0f, Mathf.Clamp(centerZ + 220f, minZ, maxZ)),
+            new Vector3(Mathf.Clamp(-300f, minX, maxX), 0f, Mathf.Clamp(centerZ + 410f, minZ, maxZ)),
+            new Vector3(Mathf.Clamp(240f, minX, maxX), 0f, Mathf.Clamp(centerZ + 610f, minZ, maxZ)),
+            new Vector3(Mathf.Clamp(-160f, minX, maxX), 0f, Mathf.Clamp(targetEndZ - 160f, minZ, maxZ)),
+            new Vector3(Mathf.Clamp(0f, minX, maxX), 0f, Mathf.Clamp(targetEndZ, minZ, maxZ))
+        };
+
+        List<Vector3> raw = BuildCatmullRomPath(controls, 18);
+        List<Vector3> spaced = ResamplePathByDistance(raw, MountainRoadSpacing);
+
+        float startY = CityRoadSurfaceY;
+        float maxTopY = terrainPos.y + terrainSize.y - 25f;
+        float desiredGain = Mathf.Clamp(terrainSize.y * 0.45f, 85f, 140f);
+        float topY = Mathf.Min(startY + desiredGain, maxTopY);
+
+        ApplyElevationProfile(spaced, startY, topY, 8f);
+        SmoothRoadElevations(spaced, 4);
+        EnforceMaxGrade(spaced, 8f);
+        SmoothRoadElevations(spaced, 2);
+
+        // Snap XZ to terrain and keep Y from our profile (road carving will make terrain match this).
+        for (int i = 0; i < spaced.Count; i++)
+        {
+            Vector3 p = spaced[i];
+            p.x = Mathf.Clamp(p.x, minX, maxX);
+            p.z = Mathf.Clamp(p.z, minZ, maxZ);
+            spaced[i] = p;
+        }
+
+        return spaced;
+    }
+
+    private void CreateRoadMeshStrip(List<Vector3> centerPoints, float width, string name, Material material, bool addCollider)
+    {
+        if (centerPoints == null || centerPoints.Count < 2)
+        {
+            return;
+        }
+
+        EnsureRoadAssets();
+
+        GameObject roadObject = new GameObject(name);
+        MeshFilter filter = roadObject.AddComponent<MeshFilter>();
+        MeshRenderer renderer = roadObject.AddComponent<MeshRenderer>();
+        renderer.sharedMaterial = material != null ? material : asphaltDryMaterial;
+
+        int vertCount = centerPoints.Count * 2;
+        Vector3[] vertices = new Vector3[vertCount];
+        Vector3[] normals = new Vector3[vertCount];
+        Vector2[] uvs = new Vector2[vertCount];
+        int[] triangles = new int[(centerPoints.Count - 1) * 6];
+
+        float half = width * 0.5f;
+        float v = 0f;
+
+        for (int i = 0; i < centerPoints.Count; i++)
+        {
+            Vector3 p = centerPoints[i];
+            Vector3 prev = centerPoints[Mathf.Max(0, i - 1)];
+            Vector3 next = centerPoints[Mathf.Min(centerPoints.Count - 1, i + 1)];
+            Vector3 tangent = (next - prev);
+            tangent.y = 0f;
+            if (tangent.sqrMagnitude < 0.001f)
+            {
+                tangent = Vector3.forward;
+            }
+            tangent.Normalize();
+
+            Vector3 right = new Vector3(-tangent.z, 0f, tangent.x);
+            Vector3 leftPoint = p - right * half;
+            Vector3 rightPoint = p + right * half;
+
+            leftPoint.y += 0.04f;
+            rightPoint.y += 0.04f;
+
+            int vi = i * 2;
+            vertices[vi] = leftPoint;
+            vertices[vi + 1] = rightPoint;
+            normals[vi] = Vector3.up;
+            normals[vi + 1] = Vector3.up;
+            uvs[vi] = new Vector2(0f, v);
+            uvs[vi + 1] = new Vector2(1f, v);
+
+            if (i < centerPoints.Count - 1)
+            {
+                v += Vector3.Distance(centerPoints[i], centerPoints[i + 1]) * 0.08f;
+            }
+        }
+
+        int ti = 0;
+        for (int i = 0; i < centerPoints.Count - 1; i++)
+        {
+            int vi = i * 2;
+            triangles[ti++] = vi;
+            triangles[ti++] = vi + 2;
+            triangles[ti++] = vi + 1;
+            triangles[ti++] = vi + 1;
+            triangles[ti++] = vi + 2;
+            triangles[ti++] = vi + 3;
+        }
+
+        Mesh mesh = new Mesh();
+        mesh.name = name + "_Mesh";
+        mesh.vertices = vertices;
+        mesh.normals = normals;
+        mesh.uv = uvs;
+        mesh.triangles = triangles;
+        mesh.RecalculateBounds();
+        filter.sharedMesh = mesh;
+
+        if (addCollider)
+        {
+            MeshCollider collider = roadObject.AddComponent<MeshCollider>();
+            collider.sharedMesh = mesh;
+            collider.material = roadPhysicsMaterial;
+        }
+
+        if (!roadSurfaceRenderers.Contains(renderer))
+        {
+            roadSurfaceRenderers.Add(renderer);
+        }
+    }
+
+    private List<Vector3> BuildCatmullRomPath(List<Vector3> controlPoints, int samplesPerSegment)
+    {
+        List<Vector3> points = new List<Vector3>();
+        if (controlPoints == null || controlPoints.Count < 2)
+        {
+            return points;
+        }
+
+        int count = controlPoints.Count;
+        for (int i = 0; i < count - 1; i++)
+        {
+            Vector3 p0 = controlPoints[Mathf.Max(i - 1, 0)];
+            Vector3 p1 = controlPoints[i];
+            Vector3 p2 = controlPoints[i + 1];
+            Vector3 p3 = controlPoints[Mathf.Min(i + 2, count - 1)];
+
+            for (int s = 0; s <= samplesPerSegment; s++)
+            {
+                if (i > 0 && s == 0)
+                {
+                    continue;
+                }
+
+                float t = s / (float)samplesPerSegment;
+                Vector3 p = 0.5f * (
+                    (2f * p1) +
+                    (-p0 + p2) * t +
+                    (2f * p0 - 5f * p1 + 4f * p2 - p3) * (t * t) +
+                    (-p0 + 3f * p1 - 3f * p2 + p3) * (t * t * t)
+                );
+                points.Add(new Vector3(p.x, 0f, p.z));
+            }
+        }
+
+        return points;
+    }
+
+    private List<Vector3> ResamplePathByDistance(List<Vector3> points, float spacing)
+    {
+        List<Vector3> resampled = new List<Vector3>();
+        if (points == null || points.Count == 0)
+        {
+            return resampled;
+        }
+
+        resampled.Add(points[0]);
+        float carry = 0f;
+
+        for (int i = 1; i < points.Count; i++)
+        {
+            Vector3 prev = points[i - 1];
+            Vector3 curr = points[i];
+            float segment = Vector3.Distance(prev, curr);
+            if (segment < 0.001f)
+            {
+                continue;
+            }
+
+            float remaining = segment;
+            Vector3 from = prev;
+
+            while (carry + remaining >= spacing)
+            {
+                float needed = spacing - carry;
+                float t = needed / remaining;
+                Vector3 next = Vector3.Lerp(from, curr, t);
+                resampled.Add(next);
+                from = next;
+                remaining -= needed;
+                carry = 0f;
+            }
+
+            carry += remaining;
+        }
+
+        if (Vector3.Distance(resampled[resampled.Count - 1], points[points.Count - 1]) > spacing * 0.4f)
+        {
+            resampled.Add(points[points.Count - 1]);
+        }
+
+        return resampled;
+    }
+
+    private void ApplyElevationProfile(List<Vector3> points, float startY, float topY, float maxSlopeDegrees)
+    {
+        if (points == null || points.Count == 0)
+        {
+            return;
+        }
+
+        float totalDist = 0f;
+        for (int i = 1; i < points.Count; i++)
+        {
+            totalDist += Vector3.Distance(points[i - 1], points[i]);
+        }
+        totalDist = Mathf.Max(1f, totalDist);
+
+        float travelled = 0f;
+        for (int i = 0; i < points.Count; i++)
+        {
+            if (i > 0)
+            {
+                travelled += Vector3.Distance(points[i - 1], points[i]);
+            }
+
+            float s = Mathf.Clamp01(travelled / totalDist);
+            float eased = s * s * (3f - 2f * s);
+            Vector3 p = points[i];
+            p.y = Mathf.Lerp(startY, topY, eased);
+            points[i] = p;
+        }
+
+        EnforceMaxGrade(points, maxSlopeDegrees);
+    }
+
+    private void SmoothRoadElevations(List<Vector3> points, int passes)
+    {
+        if (points == null || points.Count < 3)
+        {
+            return;
+        }
+
+        for (int pass = 0; pass < passes; pass++)
+        {
+            float[] copy = new float[points.Count];
+            for (int i = 0; i < points.Count; i++)
+            {
+                copy[i] = points[i].y;
+            }
+
+            for (int i = 1; i < points.Count - 1; i++)
+            {
+                float y = (copy[i - 1] + copy[i] + copy[i + 1]) / 3f;
+                Vector3 p = points[i];
+                p.y = y;
+                points[i] = p;
+            }
+        }
+    }
+
+    private void EnforceMaxGrade(List<Vector3> points, float maxSlopeDegrees)
+    {
+        if (points == null || points.Count < 2)
+        {
+            return;
+        }
+
+        float maxSlope = Mathf.Tan(maxSlopeDegrees * Mathf.Deg2Rad);
+
+        for (int i = 1; i < points.Count; i++)
+        {
+            Vector3 prev = points[i - 1];
+            Vector3 curr = points[i];
+            float dist = Vector3.Distance(prev, curr);
+            float maxDelta = maxSlope * Mathf.Max(0.1f, dist);
+            float delta = curr.y - prev.y;
+            delta = Mathf.Clamp(delta, -maxDelta, maxDelta);
+            curr.y = prev.y + delta;
+            points[i] = curr;
+        }
+
+        for (int i = points.Count - 2; i >= 0; i--)
+        {
+            Vector3 next = points[i + 1];
+            Vector3 curr = points[i];
+            float dist = Vector3.Distance(curr, next);
+            float maxDelta = maxSlope * Mathf.Max(0.1f, dist);
+            float delta = curr.y - next.y;
+            delta = Mathf.Clamp(delta, -maxDelta, maxDelta);
+            curr.y = next.y + delta;
+            points[i] = curr;
+        }
+    }
+
+    private List<Vector3> ConnectCityRoadToHillBase(Vector3 hillEntryPoint)
+    {
+        Vector3 cityRoadEnd = new Vector3(0f, CityRoadSurfaceY, 492f);
+        FlattenTerrainPatch(hillEntryPoint, HillEntryFlattenRadius, CityRoadSurfaceY);
+        Vector3 flatHillEntryPoint = new Vector3(hillEntryPoint.x, CityRoadSurfaceY, hillEntryPoint.z);
+        List<Vector3> connectorPoints = BuildFlatBridgePoints(cityRoadEnd, flatHillEntryPoint, MountainRoadSpacing);
+        CreateConnectorBridge(connectorPoints);
+        HighlightBridgePath(connectorPoints);
+        Debug.Log("Bridge created instead of slope road");
+
+        Vector3 signLeft = Vector3.Lerp(cityRoadEnd, flatHillEntryPoint, 0.35f) + new Vector3(-6.5f, 0f, 0f);
+        Vector3 signRight = Vector3.Lerp(cityRoadEnd, flatHillEntryPoint, 0.55f) + new Vector3(6.5f, 0f, 0f);
+        CreateMountainSign(signLeft, "MOUNTAIN BRIDGE");
+        CreateMountainSign(signRight, "HILL ENTRY");
+        return connectorPoints;
+    }
+
+    private float[,] GenerateMountainHeights(int resolution)
+    {
+        float[,] heights = new float[resolution, resolution];
+        float seedX = 37.3f;
+        float seedZ = 91.7f;
+
+        for (int z = 0; z < resolution; z++)
+        {
+            for (int x = 0; x < resolution; x++)
+            {
+                float nx = x / (float)(resolution - 1);
+                float nz = z / (float)(resolution - 1);
+                float ridge = Mathf.Pow(Mathf.Clamp01(nz), 1.18f);
+                float large = Mathf.PerlinNoise(seedX + nx * 2.2f, seedZ + nz * 2.2f);
+                float medium = Mathf.PerlinNoise(seedX + nx * 6.0f, seedZ + nz * 6.0f) * 0.45f;
+                float fine = Mathf.PerlinNoise(seedX + nx * 15.0f, seedZ + nz * 15.0f) * 0.12f;
+                float valley = Mathf.Abs(nx - 0.5f) * 0.22f;
+                heights[z, x] = Mathf.Clamp01(0.06f + ridge * (large * 0.62f + medium + fine) + valley);
+            }
+        }
+
+        return heights;
+    }
+
+    private void SmoothHeights(float[,] heights, int passes)
+    {
+        int rows = heights.GetLength(0);
+        int cols = heights.GetLength(1);
+
+        for (int pass = 0; pass < passes; pass++)
+        {
+            float[,] copy = (float[,])heights.Clone();
+            for (int z = 1; z < rows - 1; z++)
+            {
+                for (int x = 1; x < cols - 1; x++)
+                {
+                    float sum = 0f;
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            sum += copy[z + dz, x + dx];
+                        }
+                    }
+                    heights[z, x] = sum / 9f;
+                }
+            }
+        }
+    }
+
+    private List<Vector3> BuildTerrainRoadPoints(Vector3[] waypoints, float spacing)
+    {
+        List<Vector3> points = new List<Vector3>();
+
+        for (int i = 0; i < waypoints.Length - 1; i++)
+        {
+            Vector3 start = waypoints[i];
+            Vector3 end = waypoints[i + 1];
+            Vector3 guideDirection = new Vector3(end.x - start.x, 0f, end.z - start.z).normalized;
+            float length = Vector2.Distance(new Vector2(start.x, start.z), new Vector2(end.x, end.z));
+            int steps = Mathf.Max(2, Mathf.CeilToInt(length / spacing));
+
+            for (int step = 0; step < steps; step++)
+            {
+                if (i > 0 && step == 0)
+                {
+                    continue;
+                }
+
+                float t = step / (float)steps;
+                Vector3 candidate = Vector3.Lerp(start, end, t);
+                if (!TryGetTerrainRoadPoint(candidate, guideDirection, out Vector3 roadPoint, out float slopeAngle))
+                {
+                    if (points.Count > 0 && candidate.z > TransitionEndZ)
+                    {
+                        return points;
+                    }
+
+                    continue;
+                }
+
+                if (points.Count > 0)
+                {
+                    float segmentLength = Vector3.Distance(points[points.Count - 1], roadPoint);
+                    if (segmentLength < spacing * 0.45f)
+                    {
+                        points[points.Count - 1] = roadPoint;
+                        continue;
+                    }
+
+                    if (slopeAngle > MaxFlatRoadSlopeAngle && i > 0 && points.Count > 2)
+                    {
+                        Vector3 previous = points[points.Count - 1];
+                        roadPoint.x = Mathf.Lerp(previous.x, roadPoint.x, 0.92f);
+                        roadPoint.z = Mathf.Lerp(previous.z, roadPoint.z, 0.92f);
+                        roadPoint = ComputeRoadSurfacePoint(roadPoint);
+                    }
+                }
+
+                points.Add(roadPoint);
+            }
+        }
+
+        if (TryGetTerrainRoadPoint(
+            waypoints[waypoints.Length - 1],
+            new Vector3(
+                waypoints[waypoints.Length - 1].x - waypoints[waypoints.Length - 2].x,
+                0f,
+                waypoints[waypoints.Length - 1].z - waypoints[waypoints.Length - 2].z).normalized,
+            out Vector3 endPoint,
+            out float endSlope))
+        {
+            if (points.Count == 0 || Vector3.Distance(points[points.Count - 1], endPoint) > spacing * 0.45f)
+            {
+                points.Add(endPoint);
+            }
+            else if (endSlope <= MaxClimbRoadSlopeAngle)
+            {
+                points[points.Count - 1] = endPoint;
+            }
+        }
+
+        return points;
+    }
+
+    private List<Vector3> BuildFlatBridgePoints(Vector3 start, Vector3 end, float spacing)
+    {
+        List<Vector3> points = new List<Vector3>();
+        Vector3 flatDirection = new Vector3(end.x - start.x, 0f, end.z - start.z);
+        if (flatDirection.sqrMagnitude < 0.01f)
+        {
+            points.Add(start);
+            points.Add(end);
+            return points;
+        }
+
+        flatDirection.Normalize();
+        int steps = Mathf.Max(2, Mathf.CeilToInt(Vector3.Distance(start, end) / spacing));
+
+        for (int i = 0; i <= steps; i++)
+        {
+            float t = i / (float)steps;
+            Vector3 candidate = Vector3.Lerp(start, end, t);
+            Vector3 roadPoint = new Vector3(candidate.x, CityRoadSurfaceY, candidate.z);
+            if (points.Count == 0 || Vector3.Distance(points[points.Count - 1], roadPoint) > spacing * 0.45f)
+            {
+                points.Add(roadPoint);
+            }
+        }
+
+        if (points.Count == 0 || Vector3.Distance(points[points.Count - 1], end) > 0.5f)
+        {
+            points.Add(end);
+        }
+
+        return points;
+    }
+
+    private Vector3 FindFlatHillEntryPoint(Vector3 preferredWorldPoint)
+    {
+        Vector3 bestPoint = preferredWorldPoint;
+        float bestScore = float.MaxValue;
+
+        for (float z = TransitionEndZ + 18f; z <= TransitionEndZ + 180f; z += 8f)
+        {
+            for (float x = -180f; x <= 180f; x += 8f)
+            {
+                Vector3 candidate = new Vector3(x, 0f, z);
+                if (!TryGetTerrainNormalizedPosition(candidate, out _, out _))
+                {
+                    continue;
+                }
+
+                float slope = GetTerrainSlopeAngle(candidate);
+                float height = GetTerrainHeight(candidate);
+                float score =
+                    Mathf.Abs(x) * 0.05f +
+                    Mathf.Abs(z - preferredWorldPoint.z) * 0.08f +
+                    slope * 2.5f +
+                    Mathf.Abs(height - CityRoadSurfaceY) * 4f;
+
+                if (slope <= FlatEntrySlopeTolerance)
+                {
+                    score -= 3f;
+                }
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestPoint = new Vector3(candidate.x, CityRoadSurfaceY, candidate.z);
+                }
+            }
+        }
+
+        return bestPoint;
+    }
+
+    private void FlattenTerrainPatch(Vector3 center, float radius, float targetHeight)
+    {
+        if (mountainTerrain == null)
+        {
+            return;
+        }
+
+        TerrainData terrainData = mountainTerrain.terrainData;
+        int resolution = terrainData.heightmapResolution;
+        float[,] heights = terrainData.GetHeights(0, 0, resolution, resolution);
+        Vector3 terrainPosition = mountainTerrain.transform.position;
+        Vector3 terrainSize = terrainData.size;
+        float blendRadius = radius + 8f;
+
+        for (int z = 0; z < resolution; z++)
+        {
+            for (int x = 0; x < resolution; x++)
+            {
+                Vector3 world = new Vector3(
+                    terrainPosition.x + (x / (float)(resolution - 1)) * terrainSize.x,
+                    0f,
+                    terrainPosition.z + (z / (float)(resolution - 1)) * terrainSize.z);
+
+                float distance = Vector2.Distance(new Vector2(world.x, world.z), new Vector2(center.x, center.z));
+                if (distance > blendRadius)
+                {
+                    continue;
+                }
+
+                float normalizedTargetHeight = Mathf.Clamp01((targetHeight - terrainPosition.y) / terrainSize.y);
+                float blend = distance <= radius ? 1f : 1f - Mathf.InverseLerp(radius, blendRadius, distance);
+                heights[z, x] = Mathf.Lerp(heights[z, x], normalizedTargetHeight, blend);
+            }
+        }
+
+        terrainData.SetHeights(0, 0, heights);
+    }
+
+    private void RemoveSlopeRoadConnections()
+    {
+        string[] slopeRoadNames =
+        {
+            "Mountain Climb Road",
+            "City To Mountain Connector",
+            "Mountain Road Center Line",
+            "Mountain Road Edge Line",
+            "Mountain Guard Rail",
+            "City Bridge Rail",
+            "City Bridge Support",
+            "City Bridge Support Cap",
+            "City Bridge Debug Marker",
+            "City To Mountain Bridge"
+        };
+
+        GameObject[] sceneObjects = FindObjectsOfType<GameObject>();
+        foreach (GameObject sceneObject in sceneObjects)
+        {
+            if (sceneObject == null)
+            {
+                continue;
+            }
+
+            bool matchesKnownName = false;
+            for (int i = 0; i < slopeRoadNames.Length; i++)
+            {
+                if (sceneObject.name == slopeRoadNames[i])
+                {
+                    matchesKnownName = true;
+                    break;
+                }
+            }
+
+            bool isSlopeRoad =
+                sceneObject.name.Contains("Road") &&
+                Vector3.Angle(sceneObject.transform.up, Vector3.up) > 0.1f;
+            if (!matchesKnownName && !isSlopeRoad)
+            {
+                continue;
+            }
+
+            Destroy(sceneObject);
+        }
+    }
+
+    private void HighlightBridgePath(List<Vector3> bridgePoints)
+    {
+        if (bridgePoints == null || bridgePoints.Count == 0)
+        {
+            return;
+        }
+
+        float travelled = 0f;
+        for (int i = 0; i < bridgePoints.Count; i++)
+        {
+            if (i > 0)
+            {
+                travelled += Vector3.Distance(bridgePoints[i - 1], bridgePoints[i]);
+            }
+
+            if (i != 0 && i != bridgePoints.Count - 1 && travelled < ConnectorBridgeDebugSpacing)
+            {
+                continue;
+            }
+
+            travelled = 0f;
+            GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            marker.name = "City Bridge Debug Marker";
+            marker.transform.position = bridgePoints[i] + Vector3.up * 0.45f;
+            marker.transform.localScale = Vector3.one * 1.2f;
+            marker.GetComponent<Renderer>().material.color = new Color(0.1f, 0.9f, 1f);
+            RemoveCollider(marker);
+        }
+    }
+
+    private void LowerMountainTerrainForBridge(Vector3 samplePoint, float targetGroundHeight)
+    {
+        if (mountainTerrain == null)
+        {
+            return;
+        }
+
+        float currentHeight = mountainTerrain.SampleHeight(samplePoint) + mountainTerrain.transform.position.y;
+        float delta = targetGroundHeight - currentHeight;
+        mountainTerrain.transform.position += Vector3.up * delta;
+    }
+
+    private void CreateConnectorBridge(List<Vector3> connectorPoints)
+    {
+        if (connectorPoints == null || connectorPoints.Count < 2)
+        {
+            return;
+        }
+
+        Vector3 start = connectorPoints[0];
+        Vector3 end = connectorPoints[connectorPoints.Count - 1];
+        CreateBridgeDeckSegment(start, end, "City To Mountain Bridge");
+        CreateBridgeRail(start, end, -CityRoadEdgeOffset);
+        CreateBridgeRail(start, end, CityRoadEdgeOffset);
+
+        float totalLength = Vector3.Distance(start, end);
+        int supportCount = Mathf.Max(1, Mathf.FloorToInt(totalLength / ConnectorBridgeSupportSpacing));
+        for (int supportIndex = 1; supportIndex <= supportCount; supportIndex++)
+        {
+            float t = supportIndex / (float)(supportCount + 1);
+            CreateBridgeSupport(Vector3.Lerp(start, end, t), (end - start).normalized);
+        }
+
+        CreateBridgeStripes(connectorPoints);
+    }
+
+    private void CreateBridgeDeckSegment(Vector3 start, Vector3 end, string name)
+    {
+        if (!TryGetBridgeSegmentFrame(start, end, out Vector3 midpoint, out Quaternion rotation, out _, out float length))
+        {
+            return;
+        }
+
+        GameObject deck = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        deck.name = name;
+        deck.transform.position = midpoint;
+        deck.transform.rotation = rotation;
+        deck.transform.localScale = new Vector3(CityRoadWidth, ConnectorBridgeDeckThickness, length + 0.8f);
+        Renderer renderer = deck.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.sharedMaterial = asphaltBridgeMaterial != null ? asphaltBridgeMaterial : renderer.sharedMaterial;
+        }
+        ConfigureDriveableRoad(deck);
+    }
+
+    private void CreateBridgeStripe(Vector3 start, Vector3 end)
+    {
+        if (!TryGetBridgeSegmentFrame(start, end, out Vector3 midpoint, out Quaternion rotation, out _, out float length))
+        {
+            return;
+        }
+
+        GameObject stripe = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        stripe.name = "City Bridge Center Line";
+        stripe.transform.position = midpoint + Vector3.up * (ConnectorBridgeDeckThickness * 0.5f + 0.03f);
+        stripe.transform.rotation = rotation;
+        stripe.transform.localScale = new Vector3(0.18f, 0.04f, Mathf.Min(7f, length * 0.7f));
+        stripe.GetComponent<Renderer>().material.color = Color.yellow;
+        RemoveCollider(stripe);
+    }
+
+    private void CreateBridgeStripes(List<Vector3> bridgePoints)
+    {
+        for (int i = 0; i < bridgePoints.Count - 1; i++)
+        {
+            CreateBridgeStripe(bridgePoints[i], bridgePoints[i + 1]);
+        }
+    }
+
+    private void CreateBridgeRail(Vector3 start, Vector3 end, float lateralOffset)
+    {
+        if (!TryGetBridgeSegmentFrame(start, end, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadRight, out float length))
+        {
+            return;
+        }
+
+        GameObject rail = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        rail.name = "City Bridge Rail";
+        rail.transform.position = midpoint + roadRight * lateralOffset + Vector3.up * ConnectorBridgeRailHeight;
+        rail.transform.rotation = rotation;
+        rail.transform.localScale = new Vector3(0.22f, 0.22f, length + 0.4f);
+        rail.GetComponent<Renderer>().material.color = new Color(0.78f, 0.8f, 0.84f);
+        ConfigureBarrierCollider(rail);
+    }
+
+    private void CreateBridgeSupport(Vector3 bridgePoint, Vector3 forward)
+    {
+        float groundHeight = GetTerrainHeight(bridgePoint);
+        float supportHeight = (bridgePoint.y - ConnectorBridgeDeckThickness * 0.5f) - groundHeight;
+        if (supportHeight < 2.5f)
+        {
+            return;
+        }
+
+        Vector3 flatForward = new Vector3(forward.x, 0f, forward.z).normalized;
+        if (flatForward.sqrMagnitude < 0.001f)
+        {
+            flatForward = Vector3.forward;
+        }
+
+        Vector3 roadRight = new Vector3(-flatForward.z, 0f, flatForward.x);
+        Vector3 leftColumnPosition = new Vector3(bridgePoint.x, groundHeight + supportHeight * 0.5f, bridgePoint.z) - roadRight * 4.6f;
+        Vector3 rightColumnPosition = new Vector3(bridgePoint.x, groundHeight + supportHeight * 0.5f, bridgePoint.z) + roadRight * 4.6f;
+
+        CreateBridgeSupportColumn(leftColumnPosition, supportHeight);
+        CreateBridgeSupportColumn(rightColumnPosition, supportHeight);
+
+        GameObject capBeam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        capBeam.name = "City Bridge Support Cap";
+        capBeam.transform.position = new Vector3(bridgePoint.x, bridgePoint.y - ConnectorBridgeDeckThickness * 0.5f, bridgePoint.z);
+        capBeam.transform.rotation = Quaternion.LookRotation(flatForward, Vector3.up);
+        capBeam.transform.localScale = new Vector3(CityRoadWidth - 3.4f, 0.42f, 1.6f);
+        capBeam.GetComponent<Renderer>().material.color = new Color(0.42f, 0.46f, 0.52f);
+        RemoveCollider(capBeam);
+    }
+
+    private void CreateBridgeSupportColumn(Vector3 position, float height)
+    {
+        GameObject support = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        support.name = "City Bridge Support";
+        support.transform.position = position;
+        support.transform.localScale = new Vector3(ConnectorBridgeSupportWidth, height, 1.4f);
+        support.GetComponent<Renderer>().material.color = new Color(0.34f, 0.38f, 0.44f);
+        RemoveCollider(support);
+    }
+
+    private bool TryGetBridgeSegmentFrame(Vector3 start, Vector3 end, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadRight, out float length)
+    {
+        midpoint = (start + end) * 0.5f;
+        rotation = Quaternion.identity;
+        roadRight = Vector3.right;
+
+        Vector3 direction = end - start;
+        length = direction.magnitude;
+        if (length < 0.5f)
+        {
+            return false;
+        }
+
+        rotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+        roadRight = rotation * Vector3.right;
+        return true;
+    }
+
+    private Vector3 SampleTerrainPoint(Vector3 worldPoint)
+    {
+        if (mountainTerrain == null)
+        {
+            return worldPoint;
+        }
+
+        worldPoint.y = mountainTerrain.SampleHeight(worldPoint) + mountainTerrain.transform.position.y + 0.18f;
+        return worldPoint;
+    }
+
+    private Vector3 ComputeRoadSurfacePoint(Vector3 worldPoint)
+    {
+        Vector3 snappedPoint = SnapPointToSurface(worldPoint);
+
+        if (worldPoint.z <= TransitionStartZ)
+        {
+            worldPoint.y = CityRoadSurfaceY;
+            return worldPoint;
+        }
+
+        if (worldPoint.z < TransitionEndZ)
+        {
+            float transitionT = Mathf.InverseLerp(TransitionStartZ, TransitionEndZ, worldPoint.z);
+            worldPoint.y = Mathf.SmoothStep(CityRoadSurfaceY, snappedPoint.y, transitionT);
+            return worldPoint;
+        }
+
+        worldPoint.y = snappedPoint.y;
+        return worldPoint;
+    }
+
+    private bool TryGetTerrainRoadPoint(Vector3 worldPoint, Vector3 guideDirection, out Vector3 roadPoint, out float slopeAngle)
+    {
+        roadPoint = ComputeRoadSurfacePoint(worldPoint);
+        slopeAngle = 0f;
+        if (worldPoint.z <= TransitionStartZ)
+        {
+            return true;
+        }
+
+        if (mountainTerrain == null)
+        {
+            return false;
+        }
+
+        if (!TryResolveRoadPlacement(worldPoint, guideDirection, out roadPoint, out slopeAngle))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryResolveRoadPlacement(Vector3 worldPoint, Vector3 guideDirection, out Vector3 roadPoint, out float slopeAngle)
+    {
+        roadPoint = worldPoint;
+        slopeAngle = 90f;
+
+        Vector3 flatDirection = guideDirection.sqrMagnitude > 0.001f
+            ? guideDirection.normalized
+            : Vector3.forward;
+        Vector3 side = new Vector3(-flatDirection.z, 0f, flatDirection.x);
+
+        bool found = false;
+        float bestCost = float.MaxValue;
+
+        for (float lateral = 0f; lateral <= MountainRoadRerouteRange; lateral += MountainRoadRerouteStep)
+        {
+            for (int signIndex = 0; signIndex < 2; signIndex++)
+            {
+                float signedLateral = lateral * (signIndex == 0 ? 1f : -1f);
+                if (Mathf.Approximately(lateral, 0f) && signIndex == 1)
+                {
+                    continue;
+                }
+
+                for (int forwardStep = -1; forwardStep <= 1; forwardStep++)
+                {
+                    Vector3 probe = worldPoint + side * signedLateral + flatDirection * (forwardStep * (MountainRoadRerouteStep * 0.65f));
+                    if (!TrySampleTerrainRoadData(probe, out Vector3 probePoint, out float probeSlope))
+                    {
+                        continue;
+                    }
+
+                    if (probeSlope > MaxClimbRoadSlopeAngle)
+                    {
+                        continue;
+                    }
+
+                    float crossSlope = GetCrossRoadHeightDelta(probe, side, 4.5f);
+                    if (crossSlope > MountainRoadCrossSlopeLimit)
+                    {
+                        continue;
+                    }
+
+                    float roughness = GetRoadRoughness(probe, flatDirection, side, 6f);
+                    float cost =
+                        Mathf.Abs(signedLateral) * 0.04f +
+                        Mathf.Abs(forwardStep) * 0.2f +
+                        Mathf.Max(0f, probeSlope - MaxFlatRoadSlopeAngle) * 0.3f +
+                        crossSlope * 0.35f +
+                        roughness * 0.45f;
+
+                    if (probeSlope < MaxFlatRoadSlopeAngle)
+                    {
+                        cost -= 0.4f;
+                    }
+
+                    if (cost >= bestCost)
+                    {
+                        continue;
+                    }
+
+                    bestCost = cost;
+                    roadPoint = ComputeRoadSurfacePoint(probePoint);
+                    slopeAngle = probeSlope;
+                    found = true;
+                }
+            }
+        }
+
+        return found;
+    }
+
+    private bool TrySampleTerrainRoadData(Vector3 worldPoint, out Vector3 snappedPoint, out float slopeAngle)
+    {
+        snappedPoint = worldPoint;
+        slopeAngle = 90f;
+        if (!TryGetTerrainNormalizedPosition(worldPoint, out float normalizedX, out float normalizedZ))
+        {
+            return false;
+        }
+
+        TerrainData terrainData = mountainTerrain.terrainData;
+        Vector3 surfaceNormal = terrainData.GetInterpolatedNormal(normalizedX, normalizedZ);
+        slopeAngle = Vector3.Angle(surfaceNormal, Vector3.up);
+        snappedPoint = SampleTerrainPoint(worldPoint);
+        return true;
+    }
+
+    private bool TryGetTerrainNormalizedPosition(Vector3 worldPoint, out float normalizedX, out float normalizedZ)
+    {
+        normalizedX = 0f;
+        normalizedZ = 0f;
+        if (mountainTerrain == null)
+        {
+            return false;
+        }
+
+        TerrainData terrainData = mountainTerrain.terrainData;
+        Vector3 terrainPosition = mountainTerrain.transform.position;
+        Vector3 terrainSize = terrainData.size;
+        normalizedX = Mathf.InverseLerp(terrainPosition.x, terrainPosition.x + terrainSize.x, worldPoint.x);
+        normalizedZ = Mathf.InverseLerp(terrainPosition.z, terrainPosition.z + terrainSize.z, worldPoint.z);
+        return normalizedX > 0f && normalizedX < 1f && normalizedZ > 0f && normalizedZ < 1f;
+    }
+
+    private bool IsTerrainFlatForRoad(Vector3 worldPoint)
+    {
+        if (mountainTerrain == null)
+        {
+            return false;
+        }
+
+        if (!TryGetTerrainNormalizedPosition(worldPoint, out float normalizedX, out float normalizedZ))
+        {
+            return false;
+        }
+
+        TerrainData terrainData = mountainTerrain.terrainData;
+        Vector3 terrainPosition = mountainTerrain.transform.position;
+        Vector3 terrainSize = terrainData.size;
+        Vector3 centerNormal = terrainData.GetInterpolatedNormal(normalizedX, normalizedZ);
+        if (Vector3.Angle(centerNormal, Vector3.up) >= MaxFlatRoadSlopeAngle)
+        {
+            return false;
+        }
+
+        float centerHeight = mountainTerrain.SampleHeight(worldPoint) + mountainTerrain.transform.position.y;
+        Vector3[] offsets =
+        {
+            new Vector3(FlatRoadSampleOffset, 0f, 0f),
+            new Vector3(-FlatRoadSampleOffset, 0f, 0f),
+            new Vector3(0f, 0f, FlatRoadSampleOffset),
+            new Vector3(0f, 0f, -FlatRoadSampleOffset)
+        };
+
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            Vector3 samplePoint = worldPoint + offsets[i];
+            float sampleX = Mathf.InverseLerp(terrainPosition.x, terrainPosition.x + terrainSize.x, samplePoint.x);
+            float sampleZ = Mathf.InverseLerp(terrainPosition.z, terrainPosition.z + terrainSize.z, samplePoint.z);
+            if (sampleX <= 0f || sampleX >= 1f || sampleZ <= 0f || sampleZ >= 1f)
+            {
+                return false;
+            }
+
+            Vector3 sampleNormal = terrainData.GetInterpolatedNormal(sampleX, sampleZ);
+            if (Vector3.Angle(sampleNormal, Vector3.up) >= MaxFlatRoadSlopeAngle)
+            {
+                return false;
+            }
+
+            float sampleHeight = mountainTerrain.SampleHeight(samplePoint) + mountainTerrain.transform.position.y;
+            if (Mathf.Abs(sampleHeight - centerHeight) > FlatRoadHeightTolerance)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private Vector3 SnapPointToSurface(Vector3 worldPoint)
+    {
+        RaycastHit hit;
+        if (Physics.Raycast(worldPoint + Vector3.up * 250f, Vector3.down, out hit, 500f))
+        {
+            worldPoint.y = hit.point.y + 0.18f;
+            return worldPoint;
+        }
+
+        return SampleTerrainPoint(worldPoint);
+    }
+
+    private float GetTerrainHeight(Vector3 worldPoint)
+    {
+        if (mountainTerrain == null)
+        {
+            return worldPoint.y;
+        }
+
+        return mountainTerrain.SampleHeight(worldPoint) + mountainTerrain.transform.position.y;
+    }
+
+    private float GetTerrainSlopeAngle(Vector3 worldPoint)
+    {
+        if (!TryGetTerrainNormalizedPosition(worldPoint, out float normalizedX, out float normalizedZ))
+        {
+            return 0f;
+        }
+
+        return Vector3.Angle(mountainTerrain.terrainData.GetInterpolatedNormal(normalizedX, normalizedZ), Vector3.up);
+    }
+
+    private Vector3 GetTerrainSurfaceNormal(Vector3 worldPoint)
+    {
+        if (!TryGetTerrainNormalizedPosition(worldPoint, out float normalizedX, out float normalizedZ))
+        {
+            return Vector3.up;
+        }
+
+        return mountainTerrain.terrainData.GetInterpolatedNormal(normalizedX, normalizedZ).normalized;
+    }
+
+    private float GetCrossRoadHeightDelta(Vector3 worldPoint, Vector3 side, float sampleOffset)
+    {
+        Vector3 leftSample = worldPoint - side * sampleOffset;
+        Vector3 rightSample = worldPoint + side * sampleOffset;
+        return Mathf.Abs(GetTerrainHeight(leftSample) - GetTerrainHeight(rightSample));
+    }
+
+    private float GetRoadRoughness(Vector3 worldPoint, Vector3 forward, Vector3 side, float sampleOffset)
+    {
+        float centerHeight = GetTerrainHeight(worldPoint);
+        float forwardHeight = GetTerrainHeight(worldPoint + forward * sampleOffset);
+        float backwardHeight = GetTerrainHeight(worldPoint - forward * sampleOffset);
+        float leftHeight = GetTerrainHeight(worldPoint - side * sampleOffset);
+        float rightHeight = GetTerrainHeight(worldPoint + side * sampleOffset);
+
+        return
+            Mathf.Abs(centerHeight - forwardHeight) +
+            Mathf.Abs(centerHeight - backwardHeight) +
+            Mathf.Abs(leftHeight - rightHeight) * 0.5f;
+    }
+
+    private void CarveRoadIntoTerrain(TerrainData terrainData, List<Vector3> roadPoints, float roadHalfWidth, float shoulderWidth)
+    {
+        int resolution = terrainData.heightmapResolution;
+        float[,] heights = terrainData.GetHeights(0, 0, resolution, resolution);
+        Vector3 terrainPosition = mountainTerrain.transform.position;
+        Vector3 terrainSize = terrainData.size;
+
+        for (int z = 0; z < resolution; z++)
+        {
+            for (int x = 0; x < resolution; x++)
+            {
+                Vector3 world = new Vector3(
+                    terrainPosition.x + (x / (float)(resolution - 1)) * terrainSize.x,
+                    0f,
+                    terrainPosition.z + (z / (float)(resolution - 1)) * terrainSize.z
+                );
+
+                float roadHeight;
+                float distance = DistanceToRoad(world, roadPoints, out roadHeight);
+                if (distance > shoulderWidth)
+                {
+                    continue;
+                }
+
+                float target = Mathf.Clamp01((roadHeight - terrainPosition.y) / terrainSize.y);
+                float blend = distance <= roadHalfWidth ? 1f : 1f - Mathf.InverseLerp(roadHalfWidth, shoulderWidth, distance);
+                heights[z, x] = Mathf.Lerp(heights[z, x], target, blend);
+            }
+        }
+
+        SmoothHeights(heights, 1);
+        terrainData.SetHeights(0, 0, heights);
+    }
+
+    private void CreateMountainRoadVisuals(List<Vector3> roadPoints, string roadName, bool addGuardRails, bool createSurfaceSegments = true)
+    {
+        if (roadPoints == null || roadPoints.Count < 2)
+        {
+            return;
+        }
+
+        for (int i = 0; i < roadPoints.Count - 1; i++)
+        {
+            Vector3 start = roadPoints[i];
+            Vector3 end = roadPoints[i + 1];
+            if (Vector3.Distance(start, end) < 1f)
+            {
+                continue;
+            }
+
+            Vector3 previous = i > 0 ? roadPoints[i - 1] : start - (end - start);
+            Vector3 next = i < roadPoints.Count - 2 ? roadPoints[i + 2] : end + (end - start);
+
+            if (createSurfaceSegments)
+            {
+                CreateMountainRoadSegment(start, end, CityRoadWidth, roadName, previous, next);
+            }
+            CreateMountainRoadEdgeLine(start, end, -CityRoadEdgeOffset, previous, next);
+            CreateMountainRoadEdgeLine(start, end, CityRoadEdgeOffset, previous, next);
+            CreateMountainRoadStripe(start, end, previous, next);
+
+            if (addGuardRails)
+            {
+                CreateGuardRailsForSegment(start, end, previous, next);
+            }
+        }
+    }
+
+    private float DistanceToRoad(Vector3 point, List<Vector3> roadPoints, out float roadHeight)
+    {
+        float bestDistance = float.MaxValue;
+        roadHeight = 0f;
+
+        for (int i = 0; i < roadPoints.Count - 1; i++)
+        {
+            Vector2 a = new Vector2(roadPoints[i].x, roadPoints[i].z);
+            Vector2 b = new Vector2(roadPoints[i + 1].x, roadPoints[i + 1].z);
+            Vector2 p = new Vector2(point.x, point.z);
+            Vector2 segment = b - a;
+            float t = segment.sqrMagnitude > 0.01f ? Mathf.Clamp01(Vector2.Dot(p - a, segment) / segment.sqrMagnitude) : 0f;
+            Vector2 closest = a + segment * t;
+            float distance = Vector2.Distance(p, closest);
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                roadHeight = Mathf.Lerp(roadPoints[i].y, roadPoints[i + 1].y, t);
+            }
+        }
+
+        return bestDistance;
+    }
+
+    private Texture2D CreateSolidTexture(Color color)
+    {
+        Texture2D texture = new Texture2D(2, 2);
+        texture.SetPixel(0, 0, color);
+        texture.SetPixel(1, 0, color);
+        texture.SetPixel(0, 1, color);
+        texture.SetPixel(1, 1, color);
+        texture.Apply();
+        return texture;
+    }
+
+    private void CreateMountainRoadSegment(Vector3 start, Vector3 end, float width, string name, Vector3 previous, Vector3 next)
+    {
+        if (!TryGetRoadSegmentFrame(start, end, previous, next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length))
+        {
+            return;
+        }
+
+        GameObject road = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        road.name = name;
+        road.transform.position = midpoint + roadUp * 0.06f;
+        road.transform.rotation = rotation;
+        road.transform.localScale = new Vector3(width, 0.12f, length + 0.8f);
+        road.GetComponent<Renderer>().material.color = new Color(0.12f, 0.12f, 0.13f);
+        ConfigureDriveableRoad(road);
+    }
+
+    private void CreateMountainRoadStripe(Vector3 start, Vector3 end)
+    {
+        CreateMountainRoadStripe(start, end, start - (end - start), end + (end - start));
+    }
+
+    private void CreateMountainRoadStripe(Vector3 start, Vector3 end, Vector3 previous, Vector3 next)
+    {
+        if (!TryGetRoadSegmentFrame(start, end, previous, next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length))
+        {
+            return;
+        }
+
+        GameObject stripe = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        stripe.name = "Mountain Road Center Line";
+        stripe.transform.position = midpoint + roadUp * 0.14f;
+        stripe.transform.rotation = rotation;
+        stripe.transform.localScale = new Vector3(0.18f, 0.04f, Mathf.Min(7f, length * 0.65f));
+        stripe.GetComponent<Renderer>().material.color = Color.yellow;
+        RemoveCollider(stripe);
+    }
+
+    private void CreateMountainRoadEdgeLine(Vector3 start, Vector3 end, float lateralOffset, Vector3 previous, Vector3 next)
+    {
+        if (!TryGetRoadSegmentFrame(start, end, previous, next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length))
+        {
+            return;
+        }
+
+        GameObject edge = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        edge.name = "Mountain Road Edge Line";
+        edge.transform.position = midpoint + roadRight * lateralOffset + roadUp * 0.11f;
+        edge.transform.rotation = rotation;
+        edge.transform.localScale = new Vector3(0.14f, 0.04f, length + 0.4f);
+        edge.GetComponent<Renderer>().material.color = Color.white;
+        RemoveCollider(edge);
+    }
+
+    private bool TryGetRoadSegmentFrame(Vector3 start, Vector3 end, Vector3 previous, Vector3 next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length)
+    {
+        midpoint = (start + end) * 0.5f;
+        rotation = Quaternion.identity;
+        roadUp = Vector3.up;
+        roadRight = Vector3.right;
+        Vector3 direction = end - start;
+        length = direction.magnitude;
+        if (length < 0.5f)
+        {
+            return false;
+        }
+
+        roadUp = (GetTerrainSurfaceNormal(start) + GetTerrainSurfaceNormal(midpoint) + GetTerrainSurfaceNormal(end)).normalized;
+        if (roadUp.sqrMagnitude < 0.001f)
+        {
+            roadUp = Vector3.up;
+        }
+
+        rotation = Quaternion.LookRotation(direction.normalized, roadUp);
+        float bankAngle = GetRoadBankAngle(previous, start, end, next, roadUp);
+        rotation *= Quaternion.AngleAxis(bankAngle, Vector3.forward);
+        roadUp = rotation * Vector3.up;
+        roadRight = rotation * Vector3.right;
+        return true;
+    }
+
+    private float GetRoadBankAngle(Vector3 previous, Vector3 start, Vector3 end, Vector3 next, Vector3 upAxis)
+    {
+        Vector3 incoming = start - previous;
+        Vector3 outgoing = next - end;
+        incoming.y = 0f;
+        outgoing.y = 0f;
+
+        if (incoming.sqrMagnitude < 0.01f)
+        {
+            incoming = end - start;
+            incoming.y = 0f;
+        }
+
+        if (outgoing.sqrMagnitude < 0.01f)
+        {
+            outgoing = end - start;
+            outgoing.y = 0f;
+        }
+
+        float signedTurn = Vector3.SignedAngle(incoming.normalized, outgoing.normalized, upAxis);
+        return Mathf.Clamp(-signedTurn * 0.18f, -MountainRoadBankLimit, MountainRoadBankLimit);
+    }
+
+    private void CreateGuardRailsForSegment(Vector3 start, Vector3 end, Vector3 previous, Vector3 next)
+    {
+        if (!TryGetRoadSegmentFrame(start, end, previous, next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length))
+        {
+            return;
+        }
+
+        if (length < 6f)
+        {
+            return;
+        }
+
+        float outerOffset = CityRoadWidth * 0.5f + 4f;
+        float innerOffset = CityRoadWidth * 0.5f - 1.5f;
+        Vector3 leftInside = midpoint - roadRight * innerOffset;
+        Vector3 leftOutside = midpoint - roadRight * outerOffset;
+        Vector3 rightInside = midpoint + roadRight * innerOffset;
+        Vector3 rightOutside = midpoint + roadRight * outerOffset;
+
+        if (IsMountainEdgeRisk(leftInside, leftOutside))
+        {
+            CreateGuardRailSegment(midpoint, rotation, roadUp, roadRight, length, -CityRoadEdgeOffset);
+        }
+
+        if (IsMountainEdgeRisk(rightInside, rightOutside))
+        {
+            CreateGuardRailSegment(midpoint, rotation, roadUp, roadRight, length, CityRoadEdgeOffset);
+        }
+    }
+
+    private bool IsMountainEdgeRisk(Vector3 innerSample, Vector3 outerSample)
+    {
+        if (outerSample.z <= TransitionEndZ || mountainTerrain == null)
+        {
+            return false;
+        }
+
+        if (!TryGetTerrainNormalizedPosition(outerSample, out _, out _))
+        {
+            return false;
+        }
+
+        float innerHeight = GetTerrainHeight(innerSample);
+        float outerHeight = GetTerrainHeight(outerSample);
+        float dropAmount = innerHeight - outerHeight;
+        float outsideSlope = GetTerrainSlopeAngle(outerSample);
+        return dropAmount > MountainRoadEdgeDropThreshold || outsideSlope > 19f;
+    }
+
+    private void CreateGuardRailSegment(Vector3 midpoint, Quaternion rotation, Vector3 roadUp, Vector3 roadRight, float length, float lateralOffset)
+    {
+        GameObject beam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        beam.name = "Mountain Guard Rail";
+        beam.transform.position = midpoint + roadRight * lateralOffset + roadUp * MountainRoadGuardRailHeight;
+        beam.transform.rotation = rotation;
+        beam.transform.localScale = new Vector3(0.16f, 0.18f, length + 0.25f);
+        beam.GetComponent<Renderer>().material.color = new Color(0.74f, 0.78f, 0.82f);
+        ConfigureBarrierCollider(beam);
+    }
+
+    private void ConfigureBarrierCollider(GameObject barrier)
+    {
+        if (barrier == null)
+        {
+            return;
+        }
+
+        BoxCollider box = barrier.GetComponent<BoxCollider>();
+        if (box == null)
+        {
+            return;
+        }
+
+        box.isTrigger = false;
+        if (roadPhysicsMaterial != null)
+        {
+            box.sharedMaterial = roadPhysicsMaterial;
+        }
+    }
+
+    private void CreateMountainSafetyWalls(List<Vector3> roadPoints)
+    {
+        if (roadPoints == null || roadPoints.Count < 2)
+        {
+            return;
+        }
+
+        for (int i = 0; i < roadPoints.Count - 1; i++)
+        {
+            Vector3 start = roadPoints[i];
+            Vector3 end = roadPoints[i + 1];
+            Vector3 previous = i > 0 ? roadPoints[i - 1] : start - (end - start);
+            Vector3 next = i < roadPoints.Count - 2 ? roadPoints[i + 2] : end + (end - start);
+
+            if (!TryGetRoadSegmentFrame(start, end, previous, next, out Vector3 midpoint, out Quaternion rotation, out Vector3 roadUp, out Vector3 roadRight, out float length))
+            {
+                continue;
+            }
+
+            CreateMountainSafetyWallSegment(midpoint, rotation, roadUp, roadRight, length, -(CityRoadEdgeOffset + 0.55f));
+            CreateMountainSafetyWallSegment(midpoint, rotation, roadUp, roadRight, length, CityRoadEdgeOffset + 0.55f);
+        }
+    }
+
+    private void CreateMountainSafetyWallSegment(Vector3 midpoint, Quaternion rotation, Vector3 roadUp, Vector3 roadRight, float length, float lateralOffset)
+    {
+        GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        wall.name = "Mountain Safety Wall";
+        wall.transform.position = midpoint + roadRight * lateralOffset + roadUp * 0.50f;
+        wall.transform.rotation = rotation;
+        wall.transform.localScale = new Vector3(0.18f, 1.0f, length + 0.45f);
+        Renderer renderer = wall.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.enabled = false;
+        }
+
+        ConfigureBarrierCollider(wall);
+    }
+
+    private void CreateMountainRoadTrees(Vector3 start, Vector3 end)
+    {
+        Vector3 flatDirection = new Vector3(end.x - start.x, 0f, end.z - start.z).normalized;
+        Vector3 side = new Vector3(-flatDirection.z, 0f, flatDirection.x);
+        Vector3 center = (start + end) * 0.5f;
+
+        CreateTree(SampleTerrainPoint(center + side * 16f), 0.82f);
+        CreateTree(SampleTerrainPoint(center - side * 18f), 0.78f);
+    }
+
+    private void CreateMountainEnvironmentDetails(List<Vector3> roadPoints)
+    {
+        for (int i = 0; i < 90; i++)
+        {
+            Vector3 point = new Vector3(Random.Range(-520f, 520f), 0f, Random.Range(560f, 1860f));
+            float roadHeight;
+            if (DistanceToRoad(point, roadPoints, out roadHeight) < 22f)
+            {
+                continue;
+            }
+
+            point = SampleTerrainPoint(point);
+            if (i % 3 == 0)
+            {
+                CreateRock(point, Random.Range(1.0f, 3.2f));
+            }
+            else
+            {
+                CreateTree(point, Random.Range(0.68f, 1.05f));
+            }
+        }
+
+        CreateMountainFlowerClusters(roadPoints);
+    }
+
+    private void CreateMountainDemoVehicles(List<Vector3> roadPoints)
+    {
+        if (roadPoints == null || roadPoints.Count < 8)
+        {
+            return;
+        }
+
+        Color[] colors =
+        {
+            new Color(0.92f, 0.24f, 0.18f),
+            new Color(0.14f, 0.48f, 0.92f),
+            new Color(0.96f, 0.78f, 0.18f),
+            new Color(0.18f, 0.72f, 0.46f)
+        };
+
+        CreateMountainDemoVehicle("Mountain Demo Vehicle 1", roadPoints, 2, 1, 8.5f, MountainLaneOffset, colors[0]);
+        CreateMountainDemoVehicle("Mountain Demo Vehicle 2", roadPoints, roadPoints.Count / 2, -1, 7.8f, -MountainLaneOffset, colors[1]);
+        CreateMountainDemoVehicle("Mountain Demo Vehicle 3", roadPoints, roadPoints.Count / 3, 1, 9.2f, MountainLaneOffset, colors[2]);
+        CreateMountainDemoVehicle("Mountain Demo Vehicle 4", roadPoints, roadPoints.Count - 4, -1, 8.1f, -MountainLaneOffset, colors[3]);
+    }
+
+    private void CreateMountainDemoVehicle(string name, List<Vector3> roadPoints, int startIndex, int direction, float speed, float laneOffset, Color color)
+    {
+        GameObject vehicle = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        vehicle.name = name;
+        vehicle.transform.localScale = new Vector3(1.7f, 1f, 3.4f);
+        vehicle.GetComponent<Renderer>().material.color = color;
+
+        BoxCollider collider = vehicle.GetComponent<BoxCollider>();
+        collider.isTrigger = false;
+
+        ConfigureTrafficVehiclePhysics(vehicle);
+
+        MountainDemoVehicleMover mover = vehicle.AddComponent<MountainDemoVehicleMover>();
+        mover.speed = speed;
+        mover.startIndex = Mathf.Clamp(startIndex, 0, roadPoints.Count - 1);
+        mover.moveDirection = direction >= 0 ? 1 : -1;
+        mover.laneOffset = laneOffset;
+        mover.waypoints = roadPoints.ToArray();
+    }
+
+    private void CreateRock(Vector3 position, float scale)
+    {
+        GameObject rock = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        rock.name = "Mountain Rock";
+        rock.transform.position = position + Vector3.up * (0.28f * scale);
+        rock.transform.localScale = new Vector3(1.25f * scale, 0.55f * scale, scale);
+        rock.GetComponent<Renderer>().material.color = new Color(0.30f, 0.31f, 0.29f);
+        RemoveCollider(rock);
+    }
+
+    private void CreateMountainSign(Vector3 position, string labelText)
+    {
+        GameObject pole = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        pole.name = labelText + " Pole";
+        pole.transform.position = new Vector3(position.x, position.y + 1.1f, position.z);
+        pole.transform.localScale = new Vector3(0.08f, 1.1f, 0.08f);
+        pole.GetComponent<Renderer>().material.color = Color.gray;
+        RemoveCollider(pole);
+
+        GameObject board = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        board.name = labelText + " Sign";
+        board.transform.position = new Vector3(position.x, position.y + 2.35f, position.z);
+        board.transform.localScale = new Vector3(3.4f, 0.9f, 0.1f);
+        board.GetComponent<Renderer>().material.color = new Color(0.96f, 0.92f, 0.62f);
+        RemoveCollider(board);
+
+        GameObject label = new GameObject(labelText + " Text");
+        label.transform.position = new Vector3(position.x, position.y + 2.36f, position.z - 0.08f);
+        label.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+        TextMesh text = label.AddComponent<TextMesh>();
+        text.text = labelText;
+        text.fontSize = 32;
+        text.characterSize = 0.16f;
+        text.anchor = TextAnchor.MiddleCenter;
+        text.alignment = TextAlignment.Center;
+        text.color = Color.black;
+    }
+
+    private void CreateSideRoad(string name, Vector3 position, Vector3 scale)
+    {
+        GameObject sideRoad = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        sideRoad.name = name;
+        sideRoad.transform.position = position;
+        sideRoad.transform.localScale = scale;
+        sideRoad.GetComponent<Renderer>().material.color = new Color(0.12f, 0.12f, 0.13f);
+        ConfigureDriveableRoad(sideRoad);
+    }
+
+    private void CreateSideRoadLines(float zPosition, int direction)
+    {
+        int start = direction < 0 ? -22 : 1;
+        int end = direction < 0 ? -1 : 22;
+        float shortRoadEdgeOffset = CityRoadWidth * 0.5f - 0.35f;
+
+        for (int i = start; i <= end; i++)
+        {
+            GameObject centerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            centerLine.name = "Cut Road Center Line";
+            centerLine.transform.position = new Vector3(i * 5f, 0.13f, zPosition);
+            centerLine.transform.localScale = new Vector3(2.3f, 0.04f, 0.16f);
+            centerLine.GetComponent<Renderer>().material.color = Color.yellow;
+            RemoveCollider(centerLine);
+
+            GameObject sideA = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideA.name = "Cut Road Side Line";
+            sideA.transform.position = new Vector3(i * 5f, 0.13f, zPosition - shortRoadEdgeOffset);
+            sideA.transform.localScale = new Vector3(2.3f, 0.04f, 0.1f);
+            sideA.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideA);
+
+            GameObject sideB = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideB.name = "Cut Road Side Line";
+            sideB.transform.position = new Vector3(i * 5f, 0.13f, zPosition + shortRoadEdgeOffset);
+            sideB.transform.localScale = new Vector3(2.3f, 0.04f, 0.1f);
+            sideB.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideB);
+        }
+    }
+
+    private void CreateCutRoad(float zPosition)
+    {
+        GameObject cutRoad = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        cutRoad.name = "Cut Road";
+        cutRoad.transform.position = new Vector3(0f, 0.045f, zPosition);
+        cutRoad.transform.localScale = new Vector3(1000f, 0.07f, CityRoadWidth);
+        cutRoad.GetComponent<Renderer>().material.color = new Color(0.12f, 0.12f, 0.13f);
+        ConfigureDriveableRoad(cutRoad);
+
+        for (int i = -100; i <= 100; i++)
+        {
+            GameObject centerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            centerLine.name = "Cut Road Center Line";
+            centerLine.transform.position = new Vector3(i * 5f, 0.12f, zPosition);
+            centerLine.transform.localScale = new Vector3(2.2f, 0.035f, 0.16f);
+            centerLine.GetComponent<Renderer>().material.color = Color.yellow;
+            RemoveCollider(centerLine);
+
+            GameObject sideLineA = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideLineA.name = "Cut Road Side Line";
+            sideLineA.transform.position = new Vector3(i * 5f, 0.13f, zPosition - CityRoadEdgeOffset);
+            sideLineA.transform.localScale = new Vector3(2.2f, 0.035f, 0.1f);
+            sideLineA.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideLineA);
+
+            GameObject sideLineB = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideLineB.name = "Cut Road Side Line";
+            sideLineB.transform.position = new Vector3(i * 5f, 0.13f, zPosition + CityRoadEdgeOffset);
+            sideLineB.transform.localScale = new Vector3(2.2f, 0.035f, 0.1f);
+            sideLineB.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideLineB);
+        }
+    }
+
+    private void CreateBranchRoad(float xPosition, float zCenter)
+    {
+        GameObject branchRoad = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        branchRoad.name = "Branch Road";
+        branchRoad.transform.position = new Vector3(xPosition, 0.05f, zCenter);
+        branchRoad.transform.localScale = new Vector3(CityRoadWidth, 0.07f, 1000f);
+        branchRoad.GetComponent<Renderer>().material.color = new Color(0.12f, 0.12f, 0.13f);
+        ConfigureDriveableRoad(branchRoad);
+
+        for (int i = -100; i <= 100; i++)
+        {
+            GameObject centerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            centerLine.name = "Branch Road Center Line";
+            centerLine.transform.position = new Vector3(xPosition, 0.13f, zCenter + i * 5f);
+            centerLine.transform.localScale = new Vector3(0.16f, 0.035f, 2.2f);
+            centerLine.GetComponent<Renderer>().material.color = Color.yellow;
+            RemoveCollider(centerLine);
+
+            GameObject sideLineA = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideLineA.name = "Branch Road Side Line";
+            sideLineA.transform.position = new Vector3(xPosition - CityRoadEdgeOffset, 0.14f, zCenter + i * 5f);
+            sideLineA.transform.localScale = new Vector3(0.1f, 0.035f, 2.2f);
+            sideLineA.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideLineA);
+
+            GameObject sideLineB = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            sideLineB.name = "Branch Road Side Line";
+            sideLineB.transform.position = new Vector3(xPosition + CityRoadEdgeOffset, 0.14f, zCenter + i * 5f);
+            sideLineB.transform.localScale = new Vector3(0.1f, 0.035f, 2.2f);
+            sideLineB.GetComponent<Renderer>().material.color = Color.white;
+            RemoveCollider(sideLineB);
+        }
+    }
+
+    private void RemoveCollider(GameObject target)
+    {
+        Collider collider = target.GetComponent<Collider>();
+        if (collider != null)
+        {
+            Destroy(collider);
+        }
+    }
+
+    private void ConfigureEnvironmentObject(GameObject root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        SetLayerRecursively(root, EnvironmentLayerName);
+
+        if (root.GetComponentInChildren<Collider>(true) == null)
+        {
+            AddBoundsBoxCollider(root);
+        }
+    }
+
+    private void ConfigureBusPhysics(GameObject busObject)
+    {
+        if (busObject == null)
+        {
+            return;
+        }
+
+        SetLayerRecursively(busObject, BusLayerName);
+
+        BoxCollider collider = busObject.GetComponent<BoxCollider>();
+        if (collider == null)
+        {
+            collider = busObject.AddComponent<BoxCollider>();
+        }
+
+        collider.center = new Vector3(0f, 0.9f, 0f);
+        collider.size = new Vector3(2.5f, 1.9f, 5.4f);
+        collider.isTrigger = false;
+
+        Rigidbody rigidbody = busObject.GetComponent<Rigidbody>();
+        if (rigidbody == null)
+        {
+            rigidbody = busObject.AddComponent<Rigidbody>();
+        }
+
+        rigidbody.useGravity = true;
+        rigidbody.isKinematic = false;
+        rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        rigidbody.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+    }
+
+    private void ConfigureTrafficVehiclePhysics(GameObject vehicle)
+    {
+        if (vehicle == null)
+        {
+            return;
+        }
+
+        SetLayerRecursively(vehicle, TrafficLayerName);
+
+        BoxCollider collider = vehicle.GetComponent<BoxCollider>();
+        if (collider == null)
+        {
+            collider = vehicle.AddComponent<BoxCollider>();
+        }
+
+        collider.isTrigger = false;
+
+        Rigidbody rigidbody = vehicle.GetComponent<Rigidbody>();
+        if (rigidbody == null)
+        {
+            rigidbody = vehicle.AddComponent<Rigidbody>();
+        }
+
+        rigidbody.isKinematic = true;
+        rigidbody.useGravity = false;
+        rigidbody.interpolation = RigidbodyInterpolation.Interpolate;
+        rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        rigidbody.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationY | RigidbodyConstraints.FreezeRotationZ;
+    }
+
+    private void AddBoundsBoxCollider(GameObject root)
+    {
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        if (renderers == null || renderers.Length == 0)
+        {
+            return;
+        }
+
+        Bounds bounds = renderers[0].bounds;
+        for (int i = 1; i < renderers.Length; i++)
+        {
+            bounds.Encapsulate(renderers[i].bounds);
+        }
+
+        BoxCollider collider = root.GetComponent<BoxCollider>();
+        if (collider == null)
+        {
+            collider = root.AddComponent<BoxCollider>();
+        }
+
+        Vector3 localCenter = root.transform.InverseTransformPoint(bounds.center);
+        Vector3 localSize = root.transform.InverseTransformVector(bounds.size);
+        collider.center = localCenter;
+        collider.size = new Vector3(Mathf.Abs(localSize.x), Mathf.Abs(localSize.y), Mathf.Abs(localSize.z));
+        collider.isTrigger = false;
+    }
+
+    private void SetLayerRecursively(GameObject root, string layerName)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        int layer = LayerMask.NameToLayer(layerName);
+        if (layer < 0)
+        {
+            return;
+        }
+
+        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            transforms[i].gameObject.layer = layer;
+        }
+    }
+
+    private void ConfigureDriveableRoad(GameObject road)
+    {
+        EnsureRoadAssets();
+        SetLayerRecursively(road, GroundLayerName);
+        BoxCollider collider = road.GetComponent<BoxCollider>();
+        if (collider == null)
+        {
+            collider = road.AddComponent<BoxCollider>();
+        }
+
+        collider.material = roadPhysicsMaterial;
+        collider.isTrigger = false;
+
+        Renderer renderer = road.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            if (renderer.sharedMaterial == null)
+            {
+                renderer.sharedMaterial = asphaltDryMaterial;
+            }
+
+            if (!roadSurfaceRenderers.Contains(renderer))
+            {
+                roadSurfaceRenderers.Add(renderer);
+            }
+        }
+    }
+
+    private void CreateTrafficLights()
+    {
+        CreateTrafficLightSet(25f);
+        CreateTrafficLightSet(-300f);
+        CreateTrafficLightSet(0f);
+        CreateTrafficLightSet(300f);
+
+        float[] branchXs = { -250f, 250f };
+        float[] roadZs = { -300f, 0f, 25f, 300f };
+
+        foreach (float x in branchXs)
+        {
+            foreach (float z in roadZs)
+            {
+                CreateTrafficLightSetAt(x, z);
+            }
+        }
+    }
+
+    private void CreateTrafficLightSet(float zPosition)
+    {
+        CreateTrafficLightSetAt(0f, zPosition);
+    }
+
+    private void CreateTrafficLightSetAt(float xPosition, float zPosition)
+    {
+        float roadsideOffset = CityRoadWidth * 0.5f + TrafficLightRoadsidePadding;
+        float cornerOffset = CityRoadWidth * 0.5f + TrafficLightCornerPadding;
+        CreateTrafficLight(new Vector3(xPosition - cornerOffset, 0f, zPosition - roadsideOffset), 0f, 0f);
+        CreateTrafficLight(new Vector3(xPosition + cornerOffset, 0f, zPosition + roadsideOffset), 180f, 0f);
+        CreateTrafficLight(new Vector3(xPosition - roadsideOffset, 0f, zPosition + cornerOffset), 90f, 6.5f);
+        CreateTrafficLight(new Vector3(xPosition + roadsideOffset, 0f, zPosition - cornerOffset), -90f, 6.5f);
+    }
+
+    private void CreateSparseBuildings()
+    {
+        for (int z = -400; z <= 400; z += 200)
+        {
+            CreateBuildingGroup(-35f, z, z + 1000);
+            CreateBuildingGroup(35f, z + 55f, z + 2000);
+        }
+    }
+
+    private bool IsBuildingOnRoad(float xPosition, float zPosition, float width, float depth, float clearance)
+    {
+        float halfWidth = width / 2f + clearance;
+        float halfDepth = depth / 2f + clearance;
+        float[] verticalRoads = { 0f, -250f, 250f };
+        float[] horizontalRoads = { -300f, -250f, -70f, 0f, 25f, 260f, 300f };
+        float roadHalfWidth = CityRoadWidth * 0.5f;
+
+        foreach (float roadX in verticalRoads)
+        {
+            if (Mathf.Abs(xPosition - roadX) <= roadHalfWidth + halfWidth)
+            {
+                return true;
+            }
+        }
+
+        foreach (float roadZ in horizontalRoads)
+        {
+            if (Mathf.Abs(zPosition - roadZ) <= roadHalfWidth + halfDepth)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void CreateBuildingGroup(float xPosition, float zPosition, int seed)
+    {
+        Random.InitState(seed);
+
+        int count = Random.Range(2, 4);
+
+        for (int i = 0; i < count; i++)
+        {
+            float width = Random.Range(6f, 10f);
+            int floors = Random.Range(8, 11);
+            float height = floors * 3f;
+            float depth = Random.Range(6f, 10f);
+            float zOffset = i * Random.Range(8f, 12f);
+            float finalZ = zPosition + zOffset;
+
+            if (IsBuildingOnRoad(xPosition, finalZ, width, depth, 5f))
+            {
+                continue;
+            }
+
+            CreateLODProceduralBuilding(new Vector3(xPosition, 0f, finalZ), width, height, depth, seed + i * 31);
+        }
+    }
+
+    private void CreateLODProceduralBuilding(Vector3 basePosition, float width, float height, float depth, int seed)
+    {
+        Random.InitState(seed);
+
+        if (useImportedEnvironmentPrefabs && importedBuildingPrefabs != null && importedBuildingPrefabs.Length > 0)
+        {
+            GameObject prefab = importedBuildingPrefabs[Random.Range(0, importedBuildingPrefabs.Length)];
+            if (prefab != null)
+            {
+                GameObject instance = Instantiate(prefab);
+                instance.name = "Imported Building";
+                instance.transform.position = new Vector3(basePosition.x, 0f, basePosition.z);
+                instance.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
+                float uniform = Mathf.Clamp01((width + depth) / 16f);
+                instance.transform.localScale = Vector3.one * Mathf.Lerp(0.75f, 1.25f, uniform);
+                ConfigureEnvironmentObject(instance);
+                return;
+            }
+        }
+
+        GameObject root = new GameObject("Building");
+        root.transform.position = basePosition;
+
+        Color baseColor = Random.ColorHSV(0.52f, 0.70f, 0.18f, 0.40f, 0.50f, 0.90f);
+        Color roofColor = Color.Lerp(baseColor, Color.black, 0.35f);
+        Color windowColor = new Color(0.78f, 0.90f, 0.98f);
+
+        GameObject lod0 = new GameObject("LOD0");
+        lod0.transform.SetParent(root.transform, false);
+
+        GameObject body = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        body.name = "Body";
+        body.transform.SetParent(lod0.transform, false);
+        body.transform.localPosition = new Vector3(0f, height * 0.5f, 0f);
+        body.transform.localScale = new Vector3(width, height, depth);
+        body.GetComponent<Renderer>().material.color = baseColor;
+
+        float roofHeight = Mathf.Clamp(height * 0.06f, 0.35f, 0.9f);
+        GameObject roof = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        roof.name = "Roof";
+        roof.transform.SetParent(lod0.transform, false);
+        roof.transform.localPosition = new Vector3(0f, height + roofHeight * 0.5f, 0f);
+        roof.transform.localScale = new Vector3(width * 1.02f, roofHeight, depth * 1.02f);
+        roof.GetComponent<Renderer>().material.color = roofColor;
+        RemoveCollider(roof);
+
+        CreateWindowStrips(lod0.transform, width, height, depth, windowColor);
+        CreateRooftopDetails(lod0.transform, width, height, depth);
+
+        GameObject lod1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        lod1.name = "LOD1";
+        lod1.transform.SetParent(root.transform, false);
+        lod1.transform.localPosition = new Vector3(0f, height * 0.5f, 0f);
+        lod1.transform.localScale = new Vector3(width, height, depth);
+        lod1.GetComponent<Renderer>().material.color = baseColor;
+        RemoveCollider(lod1);
+
+        LODGroup lodGroup = root.AddComponent<LODGroup>();
+        Renderer[] lod0Renderers = lod0.GetComponentsInChildren<Renderer>(true);
+        Renderer[] lod1Renderers = lod1.GetComponentsInChildren<Renderer>(true);
+        LOD[] lods =
+        {
+            new LOD(0.55f, lod0Renderers),
+            new LOD(0.18f, lod1Renderers)
+        };
+        lodGroup.SetLODs(lods);
+        lodGroup.RecalculateBounds();
+        ConfigureEnvironmentObject(root);
+    }
+
+    private void CreateWindowStrips(Transform parent, float width, float height, float depth, Color windowColor)
+    {
+        int bands = Mathf.Clamp(Mathf.RoundToInt(height / 6f), 3, 9);
+        float windowInset = 0.02f;
+        float windowBandHeight = Mathf.Clamp(height / (bands * 2.4f), 0.35f, 0.8f);
+
+        for (int band = 0; band < bands; band++)
+        {
+            float y = (band + 1) * (height / (bands + 1f));
+            float bandWidth = width * Random.Range(0.65f, 0.85f);
+            float bandDepth = depth * Random.Range(0.65f, 0.85f);
+
+            GameObject front = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            front.name = "WindowBand";
+            front.transform.SetParent(parent, false);
+            front.transform.localPosition = new Vector3(0f, y, depth * 0.5f + windowInset);
+            front.transform.localScale = new Vector3(bandWidth, windowBandHeight, 0.05f);
+            front.GetComponent<Renderer>().material.color = windowColor;
+            RemoveCollider(front);
+
+            GameObject back = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            back.name = "WindowBand";
+            back.transform.SetParent(parent, false);
+            back.transform.localPosition = new Vector3(0f, y, -depth * 0.5f - windowInset);
+            back.transform.localScale = new Vector3(bandWidth, windowBandHeight, 0.05f);
+            back.GetComponent<Renderer>().material.color = windowColor;
+            RemoveCollider(back);
+
+            GameObject left = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            left.name = "WindowBand";
+            left.transform.SetParent(parent, false);
+            left.transform.localPosition = new Vector3(-width * 0.5f - windowInset, y, 0f);
+            left.transform.localScale = new Vector3(0.05f, windowBandHeight, bandDepth);
+            left.GetComponent<Renderer>().material.color = windowColor;
+            RemoveCollider(left);
+
+            GameObject right = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            right.name = "WindowBand";
+            right.transform.SetParent(parent, false);
+            right.transform.localPosition = new Vector3(width * 0.5f + windowInset, y, 0f);
+            right.transform.localScale = new Vector3(0.05f, windowBandHeight, bandDepth);
+            right.GetComponent<Renderer>().material.color = windowColor;
+            RemoveCollider(right);
+        }
+    }
+
+    private void CreateRooftopDetails(Transform parent, float width, float height, float depth)
+    {
+        if (Random.value < 0.55f)
+        {
+            GameObject waterTank = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            waterTank.name = "Roof Tank";
+            waterTank.transform.SetParent(parent, false);
+            waterTank.transform.localPosition = new Vector3(width * 0.18f, height + 0.75f, depth * -0.12f);
+            waterTank.transform.localScale = new Vector3(0.9f, 0.45f, 0.9f);
+            waterTank.GetComponent<Renderer>().material.color = new Color(0.18f, 0.22f, 0.28f);
+            RemoveCollider(waterTank);
+        }
+
+        if (Random.value < 0.45f)
+        {
+            GameObject antenna = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            antenna.name = "Roof Antenna";
+            antenna.transform.SetParent(parent, false);
+            antenna.transform.localPosition = new Vector3(-width * 0.22f, height + 1.15f, depth * 0.14f);
+            antenna.transform.localScale = new Vector3(0.06f, 1.0f, 0.06f);
+            antenna.GetComponent<Renderer>().material.color = new Color(0.22f, 0.22f, 0.22f);
+            RemoveCollider(antenna);
+        }
+    }
+
+    private void CreateTrafficLight(Vector3 position, float yRotation, float startOffset)
+    {
+        GameObject root = new GameObject("Traffic Light");
+        root.transform.position = position;
+        root.transform.rotation = Quaternion.Euler(0f, yRotation, 0f);
+
+        GameObject pole = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        pole.name = "Pole";
+        pole.transform.SetParent(root.transform, false);
+        pole.transform.localPosition = new Vector3(0f, 1.4f, 0f);
+        pole.transform.localScale = new Vector3(0.08f, 1.4f, 0.08f);
+        pole.GetComponent<Renderer>().material.color = new Color(0.22f, 0.22f, 0.22f);
+
+        GameObject box = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        box.name = "Light Box";
+        box.transform.SetParent(root.transform, false);
+        box.transform.localPosition = new Vector3(0f, 3f, 0f);
+        box.transform.localScale = new Vector3(0.55f, 1.35f, 0.28f);
+        box.GetComponent<Renderer>().material.color = new Color(0.05f, 0.05f, 0.05f);
+
+        Renderer red = CreateLightBulb(root.transform, new Vector3(0f, 3.38f, -0.16f), Color.red);
+        Renderer yellow = CreateLightBulb(root.transform, new Vector3(0f, 3f, -0.16f), Color.yellow);
+        Renderer green = CreateLightBulb(root.transform, new Vector3(0f, 2.62f, -0.16f), Color.green);
+
+        TrafficLightController controller = root.AddComponent<TrafficLightController>();
+        controller.redLight = red;
+        controller.yellowLight = yellow;
+        controller.greenLight = green;
+        controller.startOffset = startOffset;
+
+        BoxCollider collider = root.AddComponent<BoxCollider>();
+        collider.center = new Vector3(0f, 2.7f, 0f);
+        collider.size = new Vector3(1.05f, 5.9f, 0.95f);
+        ConfigureEnvironmentObject(root);
+    }
+
+    private Renderer CreateLightBulb(Transform parent, Vector3 localPosition, Color color)
+    {
+        GameObject bulb = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        bulb.name = "Light Bulb";
+        bulb.transform.SetParent(parent, false);
+        bulb.transform.localPosition = localPosition;
+        bulb.transform.localScale = new Vector3(0.23f, 0.23f, 0.08f);
+
+        Renderer renderer = bulb.GetComponent<Renderer>();
+        renderer.material.color = color;
+        return renderer;
+    }
+
+    private void CreateCityBuildings()
+    {
+        for (int i = -8; i <= 8; i++)
+        {
+            CreateBuildingRow(-11f, i * 10f, i);
+            CreateBuildingRow(11f, i * 10f, i + 50);
+        }
+
+        for (int i = -5; i <= 5; i++)
+        {
+            if (Mathf.Abs(i) < 2)
+            {
+                continue;
+            }
+
+            CreateCrossRoadBuilding(i * 10f, 16f, i + 100);
+            CreateCrossRoadBuilding(i * 10f, 34f, i + 150);
+        }
+    }
+
+    private void CreateCrossRoadBuilding(float xPosition, float zPosition, int seed)
+    {
+        Random.InitState(seed * 37 + 11);
+
+        float width = Random.Range(3f, 6f);
+        float height = Random.Range(4f, 11f);
+        float depth = Random.Range(2.5f, 4.5f);
+
+        GameObject building = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        building.name = "Second Road Building";
+        building.transform.position = new Vector3(xPosition, height / 2f, zPosition);
+        building.transform.localScale = new Vector3(width, height, depth);
+        building.GetComponent<Renderer>().material.color = Random.ColorHSV(0.55f, 0.70f, 0.18f, 0.42f, 0.52f, 0.9f);
+    }
+
+    private void CreateBuildingRow(float xPosition, float zPosition, int seed)
+    {
+        Random.InitState(seed * 31 + 7);
+
+        float width = Random.Range(2.5f, 4.5f);
+        float height = Random.Range(4f, 12f);
+        float depth = Random.Range(3f, 6f);
+
+        GameObject building = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        building.name = "City Building";
+        building.transform.position = new Vector3(xPosition, height / 2f, zPosition);
+        building.transform.localScale = new Vector3(width, height, depth);
+
+        Renderer renderer = building.GetComponent<Renderer>();
+        renderer.material.color = Random.ColorHSV(0.50f, 0.68f, 0.18f, 0.45f, 0.55f, 0.9f);
+
+        CreateWindows(building.transform, width, height, depth, xPosition < 0f);
+    }
+
+    private void CreateWindows(Transform building, float width, float height, float depth, bool faceRight)
+    {
+        int floors = Mathf.Max(2, Mathf.FloorToInt(height / 1.6f));
+        int columns = 2;
+        float frontX = building.position.x + (faceRight ? width / 2f + 0.03f : -width / 2f - 0.03f);
+        float windowZOffset = depth / 4f;
+
+        for (int floor = 1; floor < floors; floor++)
+        {
+            for (int col = 0; col < columns; col++)
+            {
+                GameObject window = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                window.name = "Window";
+                window.transform.SetParent(building, true);
+
+                float localZ = col == 0 ? -windowZOffset : windowZOffset;
+                window.transform.position = new Vector3(
+                    frontX,
+                    floor * 1.4f,
+                    building.position.z + localZ
+                );
+                window.transform.localScale = new Vector3(0.04f, 0.55f, 0.6f);
+                window.GetComponent<Renderer>().material.color = new Color(0.95f, 0.85f, 0.35f);
+            }
+        }
+
+        GameObject shopBoard = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        shopBoard.name = "Shop Board";
+        shopBoard.transform.position = new Vector3(frontX, 1.2f, building.position.z);
+        shopBoard.transform.localScale = new Vector3(0.05f, 0.55f, depth * 0.75f);
+        shopBoard.GetComponent<Renderer>().material.color = faceRight ? new Color(0.95f, 0.2f, 0.16f) : new Color(0.12f, 0.55f, 0.95f);
+    }
+
+    private void CreateKilometerBoards()
+    {
+        int kilometerNumber = 1;
+
+        for (int z = -75; z <= 75; z += 25)
+        {
+            CreateKilometerBoard(-4.9f, z, kilometerNumber, true);
+            CreateKilometerBoard(4.9f, z, kilometerNumber, false);
+            kilometerNumber++;
+        }
+    }
+
+    private void CreateKilometerBoard(float xPosition, float zPosition, int kilometerNumber, bool leftSide)
+    {
+        GameObject pole = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        pole.name = "KM Board Pole";
+        pole.transform.position = new Vector3(xPosition, 0.8f, zPosition);
+        pole.transform.localScale = new Vector3(0.08f, 0.8f, 0.08f);
+        pole.GetComponent<Renderer>().material.color = Color.gray;
+
+        GameObject board = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        board.name = "KM Board";
+        board.transform.position = new Vector3(xPosition, 1.75f, zPosition);
+        board.transform.localScale = new Vector3(1.4f, 0.7f, 0.08f);
+        board.GetComponent<Renderer>().material.color = Color.white;
+
+        GameObject label = new GameObject("KM Text");
+        label.transform.position = new Vector3(xPosition, 1.76f, zPosition - 0.07f);
+        label.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+        TextMesh text = label.AddComponent<TextMesh>();
+        text.text = kilometerNumber + " KM";
+        text.fontSize = 38;
+        text.characterSize = 0.16f;
+        text.anchor = TextAnchor.MiddleCenter;
+        text.alignment = TextAlignment.Center;
+        text.color = Color.black;
+
+        if (!leftSide)
+        {
+            label.transform.rotation = Quaternion.Euler(90f, 180f, 0f);
+        }
+    }
+
+    private void CreateBus()
+    {
+        BusSpawner spawner = GetComponent<BusSpawner>();
+        if (spawner == null)
+        {
+            spawner = gameObject.AddComponent<BusSpawner>();
+        }
+
+        bus = spawner.SpawnBusFromResources(cityBusStartPosition, cityBusStartRotation, busSpawnPointName);
+        if (bus == null)
+        {
+            Debug.LogError("GameBootstrap: BusSpawner failed to create the player bus.");
+            return;
+        }
+
+        bus.useWheelColliderDrive = false;
+    }
+
+    private void AddBusWheelColliders(GameObject busObject)
+    {
+        Vector3[] wheelPositions =
+        {
+            new Vector3(-1.05f, -0.42f, 1.65f),
+            new Vector3(1.05f, -0.42f, 1.65f),
+            new Vector3(-1.05f, -0.42f, -1.65f),
+            new Vector3(1.05f, -0.42f, -1.65f)
+        };
+
+        for (int i = 0; i < wheelPositions.Length; i++)
+        {
+            GameObject wheel = new GameObject(i < 2 ? "Front Wheel Collider" : "Rear Wheel Collider");
+            wheel.transform.SetParent(busObject.transform, false);
+            wheel.transform.localPosition = wheelPositions[i];
+
+            WheelCollider collider = wheel.AddComponent<WheelCollider>();
+            collider.radius = 0.45f;
+            collider.suspensionDistance = 0.28f;
+            collider.mass = 55f;
+            collider.wheelDampingRate = 0.65f;
+
+            JointSpring spring = collider.suspensionSpring;
+            spring.spring = 22000f;
+            spring.damper = 3600f;
+            spring.targetPosition = 0.52f;
+            collider.suspensionSpring = spring;
+
+            WheelFrictionCurve forwardFriction = collider.forwardFriction;
+            forwardFriction.extremumSlip = 0.35f;
+            forwardFriction.extremumValue = 1.4f;
+            forwardFriction.asymptoteSlip = 0.75f;
+            forwardFriction.asymptoteValue = 1f;
+            forwardFriction.stiffness = 2.2f;
+            collider.forwardFriction = forwardFriction;
+
+            WheelFrictionCurve sidewaysFriction = collider.sidewaysFriction;
+            sidewaysFriction.extremumSlip = 0.22f;
+            sidewaysFriction.extremumValue = 1.6f;
+            sidewaysFriction.asymptoteSlip = 0.5f;
+            sidewaysFriction.asymptoteValue = 1.25f;
+            sidewaysFriction.stiffness = 3.2f;
+            collider.sidewaysFriction = sidewaysFriction;
+        }
+    }
+
+    private void AddBusPassengers(GameObject busObject)
+    {
+        Vector3[] seats =
+        {
+            new Vector3(-0.32f, 0.42f, 1.05f),
+            new Vector3(0.32f, 0.42f, 1.05f),
+            new Vector3(-0.32f, 0.42f, 0.35f),
+            new Vector3(0.32f, 0.42f, 0.35f),
+            new Vector3(-0.32f, 0.42f, -0.35f),
+            new Vector3(0.32f, 0.42f, -0.35f),
+            new Vector3(-0.32f, 0.42f, -1.05f),
+            new Vector3(0.32f, 0.42f, -1.05f),
+            new Vector3(-0.28f, 0.42f, -1.65f),
+            new Vector3(0.28f, 0.42f, -1.65f)
+        };
+
+        Color[] shirts =
+        {
+            new Color(0.98f, 0.45f, 0.58f),
+            new Color(0.95f, 0.78f, 0.34f),
+            new Color(0.48f, 0.76f, 0.98f),
+            new Color(0.52f, 0.88f, 0.58f)
+        };
+
+        for (int i = 0; i < seats.Length; i++)
+        {
+            GameObject passenger = new GameObject("Passenger " + (i + 1));
+            passenger.transform.SetParent(busObject.transform, false);
+            passenger.transform.localPosition = seats[i];
+            passenger.transform.localRotation = Quaternion.Euler(0f, i % 2 == 0 ? 12f : -12f, 0f);
+            passenger.transform.localScale = Vector3.one * 0.8f;
+
+            GameObject torso = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            torso.name = "Torso";
+            torso.transform.SetParent(passenger.transform, false);
+            torso.transform.localPosition = new Vector3(0f, 0.24f, 0f);
+            torso.transform.localScale = new Vector3(0.28f, 0.42f, 0.28f);
+            torso.GetComponent<Renderer>().material.color = shirts[i % shirts.Length];
+            RemoveCollider(torso);
+
+            GameObject head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            head.name = "Head";
+            head.transform.SetParent(passenger.transform, false);
+            head.transform.localPosition = new Vector3(0f, 0.72f, 0f);
+            head.transform.localScale = Vector3.one * 0.18f;
+            head.GetComponent<Renderer>().material.color = new Color(0.96f, 0.84f, 0.72f);
+            RemoveCollider(head);
+        }
+    }
+
+    private void CreateMovingDemoVehicle()
+    {
+        Color[] colors =
+        {
+            new Color(0.10f, 0.45f, 0.95f),
+            new Color(0.90f, 0.12f, 0.10f),
+            new Color(0.90f, 0.90f, 0.86f),
+            new Color(0.45f, 0.18f, 0.85f),
+            new Color(0.05f, 0.75f, 0.42f),
+            new Color(0.95f, 0.72f, 0.10f),
+            new Color(0.05f, 0.78f, 0.86f),
+            new Color(0.95f, 0.28f, 0.55f),
+            new Color(0.95f, 0.45f, 0.12f),
+            new Color(0.25f, 0.85f, 0.25f)
+        };
+
+        for (int i = 0; i < 10; i++)
+        {
+            int direction = i % 2 == 0 ? 1 : -1;
+            float laneX = direction > 0 ? -CityLaneOffset : CityLaneOffset;
+            float startZ = -470f + i * 82f;
+            float speed = 8.5f + (i % 4) * 0.8f;
+            CreateMainRoadDemoVehicle("Main Road Demo Vehicle " + (i + 1), laneX, startZ, speed, colors[i % colors.Length], direction);
+        }
+
+        float[] cutRoadCenters = { -300f, 0f, 25f, 300f };
+
+        for (int road = 0; road < cutRoadCenters.Length; road++)
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                int direction = i % 2 == 0 ? 1 : -1;
+                float laneZ = cutRoadCenters[road] + (direction > 0 ? CityLaneOffset : -CityLaneOffset);
+                float startX = -470f + i * 78f;
+                float speed = 7.5f + (i % 4) * 0.7f;
+                Color color = colors[(road + i) % colors.Length];
+                CreateCrossRoadDemoBus("Cut Road " + (road + 1) + " Demo Bus " + (i + 1), laneZ, startX, speed, color, direction);
+            }
+        }
+
+        CreateBranchRoadDemoVehicles(250f, -300f, "Branch Road A", colors);
+        CreateBranchRoadDemoVehicles(-250f, 0f, "Branch Road B", colors);
+        CreateBranchRoadDemoVehicles(250f, 300f, "Branch Road C", colors);
+    }
+
+    private void CreateBranchRoadDemoVehicles(float xCenter, float zCenter, string roadName, Color[] colors)
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            int direction = i % 2 == 0 ? 1 : -1;
+            float laneX = xCenter + (direction > 0 ? -CityLaneOffset : CityLaneOffset);
+            float startZ = zCenter - 470f + i * 78f;
+            float speed = 7.8f + (i % 4) * 0.65f;
+            Color color = colors[(i + 3) % colors.Length];
+            CreateMainRoadDemoVehicle(roadName + " Demo Vehicle " + (i + 1), laneX, startZ, speed, color, direction);
+        }
+    }
+
+    private void CreateMainRoadDemoVehicle(string name, float laneX, float startZ, float speed, Color color, int direction)
+    {
+        GameObject vehicle = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        vehicle.name = name;
+        vehicle.transform.position = new Vector3(laneX, 0.65f, startZ);
+        vehicle.transform.localScale = new Vector3(1.6f, 1f, 3.2f);
+        vehicle.GetComponent<Renderer>().material.color = color;
+
+        BoxCollider collider = vehicle.GetComponent<BoxCollider>();
+        collider.isTrigger = false;
+
+        ConfigureTrafficVehiclePhysics(vehicle);
+        AddTrafficVehicleDetails(vehicle.transform, color, false);
+
+        DemoVehicleMover mover = vehicle.AddComponent<DemoVehicleMover>();
+        mover.speed = speed;
+        mover.startZ = startZ;
+        mover.endZ = 470f;
+        mover.laneX = laneX;
+        mover.moveDirection = direction;
+    }
+
+    private void CreateCrossRoadDemoBus(string name, float laneZ, float startX, float speed, Color color, int direction)
+    {
+        GameObject busObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        busObject.name = name;
+        busObject.transform.position = new Vector3(startX, 0.8f, laneZ);
+        busObject.transform.localScale = new Vector3(3.6f, 1.3f, 1.8f);
+        busObject.GetComponent<Renderer>().material.color = color;
+
+        BoxCollider collider = busObject.GetComponent<BoxCollider>();
+        collider.isTrigger = false;
+
+        ConfigureTrafficVehiclePhysics(busObject);
+        AddTrafficVehicleDetails(busObject.transform, color, true);
+
+        DemoVehicleMover mover = busObject.AddComponent<DemoVehicleMover>();
+        mover.moveOnXAxis = true;
+        mover.speed = speed;
+        mover.startX = startX;
+        mover.endX = 470f;
+        mover.laneZ = laneZ;
+        mover.moveDirection = direction;
+    }
+
+    private void AddTrafficVehicleDetails(Transform root, Color bodyColor, bool isBus)
+    {
+        GameObject roof = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        roof.name = "Traffic Roof";
+        roof.transform.SetParent(root, false);
+        roof.transform.localPosition = isBus ? new Vector3(0f, 0.78f, 0.12f) : new Vector3(0f, 0.52f, 0.05f);
+        roof.transform.localScale = isBus ? new Vector3(2.6f, 0.32f, 1.45f) : new Vector3(1.05f, 0.26f, 1.75f);
+        roof.GetComponent<Renderer>().material.color = Color.Lerp(bodyColor, Color.white, 0.26f);
+        RemoveCollider(roof);
+
+        GameObject windshield = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        windshield.name = "Traffic Windshield";
+        windshield.transform.SetParent(root, false);
+        windshield.transform.localPosition = isBus ? new Vector3(0f, 0.24f, 1.66f) : new Vector3(0f, 0.18f, 1.18f);
+        windshield.transform.localScale = isBus ? new Vector3(2.22f, 0.72f, 0.12f) : new Vector3(0.98f, 0.45f, 0.08f);
+        windshield.GetComponent<Renderer>().material.color = new Color(0.72f, 0.88f, 0.98f);
+        RemoveCollider(windshield);
+
+        GameObject rearPanel = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        rearPanel.name = "Traffic Rear Panel";
+        rearPanel.transform.SetParent(root, false);
+        rearPanel.transform.localPosition = isBus ? new Vector3(0f, 0.22f, -1.74f) : new Vector3(0f, 0.14f, -1.08f);
+        rearPanel.transform.localScale = isBus ? new Vector3(2.18f, 0.68f, 0.10f) : new Vector3(0.92f, 0.36f, 0.08f);
+        rearPanel.GetComponent<Renderer>().material.color = Color.Lerp(bodyColor, Color.black, 0.2f);
+        RemoveCollider(rearPanel);
+
+        float wheelOffsetX = isBus ? 1.2f : 0.72f;
+        float wheelOffsetZ = isBus ? 1.2f : 0.92f;
+        float wheelY = isBus ? -0.18f : -0.28f;
+        CreateTrafficWheel(root, "FrontLeft Wheel", new Vector3(-wheelOffsetX, wheelY, wheelOffsetZ), isBus ? 0.46f : 0.34f);
+        CreateTrafficWheel(root, "FrontRight Wheel", new Vector3(wheelOffsetX, wheelY, wheelOffsetZ), isBus ? 0.46f : 0.34f);
+        CreateTrafficWheel(root, "RearLeft Wheel", new Vector3(-wheelOffsetX, wheelY, -wheelOffsetZ), isBus ? 0.46f : 0.34f);
+        CreateTrafficWheel(root, "RearRight Wheel", new Vector3(wheelOffsetX, wheelY, -wheelOffsetZ), isBus ? 0.46f : 0.34f);
+    }
+
+    private void CreateTrafficWheel(Transform parent, string name, Vector3 localPosition, float radius)
+    {
+        GameObject wheel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        wheel.name = name;
+        wheel.transform.SetParent(parent, false);
+        wheel.transform.localPosition = localPosition;
+        wheel.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+        wheel.transform.localScale = new Vector3(radius, radius * 0.35f, radius);
+        wheel.GetComponent<Renderer>().material.color = new Color(0.08f, 0.08f, 0.08f);
+        RemoveCollider(wheel);
+    }
+
+    private void SetupCamera()
+    {
+        Camera cam = Camera.main;
+        if (cam == null)
+        {
+            GameObject cameraObject = new GameObject("Main Camera");
+            cam = cameraObject.AddComponent<Camera>();
+            cameraObject.tag = "MainCamera";
+        }
+
+        cam.nearClipPlane = 0.1f;
+        cam.farClipPlane = 1200f;
+        cam.orthographic = false;
+
+        SimpleCameraFollow follow = cam.GetComponent<SimpleCameraFollow>();
+        if (follow == null)
+        {
+            follow = cam.gameObject.AddComponent<SimpleCameraFollow>();
+        }
+
+        follow.SetTarget(bus.transform);
+        follow.SetView((int)SimpleCameraFollow.CameraView.Chase);
+        follow.offset = new Vector3(0f, 3.5f, -8f);
+        follow.lookOffset = new Vector3(0f, 1.8f, 4.5f);
+        follow.smoothness = 5f;
+        follow.SnapToTarget();
+    }
+
+    private void CreateHud()
+    {
+        GameObject canvasObject = new GameObject("HUD Canvas");
+        legacyHudCanvasObject = canvasObject;
+        Canvas canvas = canvasObject.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvasObject.AddComponent<CanvasScaler>();
+        canvasObject.AddComponent<GraphicRaycaster>();
+
+        GameObject panelObject = new GameObject("Top Left Speed Panel");
+        panelObject.transform.SetParent(canvasObject.transform, false);
+
+        hudPanel = panelObject.AddComponent<Image>();
+        hudPanel.color = new Color(0f, 0f, 0f, 0.62f);
+
+        RectTransform panelRect = hudPanel.GetComponent<RectTransform>();
+        panelRect.anchorMin = new Vector2(0f, 1f);
+        panelRect.anchorMax = new Vector2(0f, 1f);
+        panelRect.pivot = new Vector2(0f, 1f);
+        panelRect.anchoredPosition = new Vector2(18f, -18f);
+        panelRect.sizeDelta = new Vector2(470f, 145f);
+
+        GameObject textObject = new GameObject("Speed Text");
+        textObject.transform.SetParent(panelObject.transform, false);
+
+        speedText = textObject.AddComponent<Text>();
+        speedText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        speedText.fontSize = 23;
+        speedText.color = Color.white;
+        speedText.text = "Speed: 0 km/h";
+
+        RectTransform rect = speedText.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = new Vector2(16f, -12f);
+        rect.sizeDelta = new Vector2(440f, 130f);
+    }
+
+    private void CreateRuntimeUiSystem()
+    {
+        if (FindObjectOfType<EventSystem>() == null)
+        {
+            GameObject eventSystemObject = new GameObject("EventSystem");
+            eventSystemObject.AddComponent<EventSystem>();
+            eventSystemObject.AddComponent<StandaloneInputModule>();
+        }
+
+        GameObject uiRoot = new GameObject("AAA UI");
+        Canvas canvas = uiRoot.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 50;
+        CanvasScaler scaler = uiRoot.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1080f, 1920f);
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+        scaler.matchWidthOrHeight = 0.5f;
+        uiRoot.AddComponent<GraphicRaycaster>();
+
+        UIScreenManager screenManager = uiRoot.AddComponent<UIScreenManager>();
+        MenuController menuController = uiRoot.AddComponent<MenuController>();
+        GameObject mainMenu = CreateScreen(uiRoot.transform, "MainMenuScreen", new Color(0.08f, 0.10f, 0.12f, 0.96f));
+        GameObject hudScreen = CreateScreen(uiRoot.transform, "HUDScreen", new Color(0f, 0f, 0f, 0f));
+        GameObject pauseScreen = CreateScreen(uiRoot.transform, "PauseMenuScreen", new Color(0.05f, 0.06f, 0.08f, 0.92f));
+        GameObject settingsScreen = CreateScreen(uiRoot.transform, "SettingsScreen", new Color(0.06f, 0.07f, 0.10f, 0.94f));
+        GameObject garageScreen = CreateScreen(uiRoot.transform, "GarageScreen", new Color(0.05f, 0.05f, 0.06f, 0.95f));
+        GameObject routesScreen = CreateScreen(uiRoot.transform, "RoutesScreen", new Color(0.05f, 0.06f, 0.07f, 0.95f));
+        GameObject shopScreen = CreateScreen(uiRoot.transform, "ShopScreen", new Color(0.05f, 0.06f, 0.08f, 0.95f));
+        CreateLoadingOverlay(uiRoot.transform, out CanvasGroup fadeRoot, out CanvasGroup loadingRoot, out Slider loadingBar, out TMP_Text loadingText);
+
+        AudioClip menuMusicClip = CreateMenuMusicClip();
+        AudioClip clickSoundClip = CreateClickSoundClip();
+        AudioSource musicSource = uiRoot.AddComponent<AudioSource>();
+        musicSource.playOnAwake = false;
+        musicSource.loop = true;
+        musicSource.volume = 0.25f;
+        musicSource.clip = menuMusicClip;
+
+        AudioSource sfxSource = uiRoot.AddComponent<AudioSource>();
+        sfxSource.playOnAwake = false;
+        sfxSource.loop = false;
+        sfxSource.volume = 0.95f;
+
+        BuildMainMenu(mainMenu.transform, menuController);
+        BuildHudScreen(hudScreen.transform);
+        BuildPauseScreen(pauseScreen.transform, menuController);
+        BuildSettingsScreen(settingsScreen.transform, menuController);
+        BuildGarageScreen(garageScreen.transform, menuController);
+        BuildRoutesScreen(routesScreen.transform, menuController);
+        BuildShopScreen(shopScreen.transform, menuController);
+
+        screenManager.SetScreens(
+            mainMenu.GetComponent<CanvasGroup>(),
+            garageScreen.GetComponent<CanvasGroup>(),
+            routesScreen.GetComponent<CanvasGroup>(),
+            shopScreen.GetComponent<CanvasGroup>(),
+            settingsScreen.GetComponent<CanvasGroup>(),
+            pauseScreen.GetComponent<CanvasGroup>());
+        screenManager.SetAudio(sfxSource, clickSoundClip);
+        menuController.BindRuntimeManager(screenManager);
+        menuController.BindRuntimeUi(
+            FindText(mainMenu.transform, "PlayerName"),
+            FindText(mainMenu.transform, "PlayerLevel"),
+            FindText(mainMenu.transform, "PlayerCoins"),
+            FindText(mainMenu.transform, "EventTitle"),
+            FindText(mainMenu.transform, "EventBody"),
+            FindTransform(garageScreen.transform, "Content"),
+            FindText(garageScreen.transform, "SelectedName"),
+            FindText(garageScreen.transform, "Stats"),
+            FindButton(garageScreen.transform, "SelectButton"),
+            FindButton(garageScreen.transform, "UpgradeButton"),
+            FindTransform(routesScreen.transform, "Content"),
+            FindText(routesScreen.transform, "SelectedName"),
+            FindText(routesScreen.transform, "Details"),
+            FindButton(routesScreen.transform, "StartButton"),
+            FindTransform(shopScreen.transform, "Content"),
+            FindText(shopScreen.transform, "Currency"),
+            FindButton(shopScreen.transform, "PurchaseButton"),
+            FindDropdown(settingsScreen.transform, "GraphicsDropdown"),
+            FindSlider(settingsScreen.transform, "MasterVolume"),
+            FindSlider(settingsScreen.transform, "MusicVolume"),
+            FindSlider(settingsScreen.transform, "SfxVolume"),
+            FindInput(settingsScreen.transform, "ForwardKey"),
+            FindInput(settingsScreen.transform, "BackKey"),
+            FindInput(settingsScreen.transform, "LeftKey"),
+            FindInput(settingsScreen.transform, "RightKey"),
+            FindInput(settingsScreen.transform, "BrakeKey"),
+            FindButton(pauseScreen.transform, "ResumeButton"),
+            FindButton(pauseScreen.transform, "RestartButton"),
+            FindButton(pauseScreen.transform, "PauseSettingsButton"),
+            FindButton(pauseScreen.transform, "ExitMainMenuButton"));
+        menuController.BindRuntimeMobileUi(loadingRoot, loadingBar, loadingText, fadeRoot, musicSource, sfxSource, menuMusicClip, clickSoundClip);
+        menuController.InitializeRuntimeUi();
+
+        WireMainMenuButtons(mainMenu.transform, menuController);
+        if (legacyHudCanvasObject != null)
+        {
+            Destroy(legacyHudCanvasObject);
+            legacyHudCanvasObject = null;
+        }
+        screenManager.ShowMainMenu();
+    }
+
+    private static GameObject CreateScreen(Transform parent, string name, Color background)
+    {
+        GameObject screen = new GameObject(name);
+        screen.transform.SetParent(parent, false);
+
+        RectTransform rect = screen.AddComponent<RectTransform>();
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+
+        CanvasGroup group = screen.AddComponent<CanvasGroup>();
+        group.alpha = 0f;
+        group.interactable = false;
+        group.blocksRaycasts = false;
+
+        Image image = screen.AddComponent<Image>();
+        image.color = background;
+        return screen;
+    }
+
+    private static void CreateLoadingOverlay(
+        Transform parent,
+        out CanvasGroup fadeRoot,
+        out CanvasGroup loadingRoot,
+        out Slider loadingProgressBar,
+        out TMP_Text loadingProgressText)
+    {
+        GameObject fadeObject = new GameObject("FadeOverlay", typeof(RectTransform), typeof(Image), typeof(CanvasGroup));
+        fadeObject.transform.SetParent(parent, false);
+        RectTransform fadeRect = fadeObject.GetComponent<RectTransform>();
+        fadeRect.anchorMin = Vector2.zero;
+        fadeRect.anchorMax = Vector2.one;
+        fadeRect.offsetMin = Vector2.zero;
+        fadeRect.offsetMax = Vector2.zero;
+        fadeObject.GetComponent<Image>().color = Color.black;
+
+        fadeRoot = fadeObject.GetComponent<CanvasGroup>();
+        fadeRoot.alpha = 0f;
+        fadeRoot.blocksRaycasts = false;
+        fadeRoot.interactable = false;
+        fadeObject.SetActive(false);
+
+        GameObject loadingObject = new GameObject("LoadingOverlay", typeof(RectTransform), typeof(Image), typeof(CanvasGroup));
+        loadingObject.transform.SetParent(parent, false);
+        RectTransform loadingRect = loadingObject.GetComponent<RectTransform>();
+        loadingRect.anchorMin = Vector2.zero;
+        loadingRect.anchorMax = Vector2.one;
+        loadingRect.offsetMin = Vector2.zero;
+        loadingRect.offsetMax = Vector2.zero;
+        loadingObject.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.72f);
+
+        loadingRoot = loadingObject.GetComponent<CanvasGroup>();
+        loadingRoot.alpha = 0f;
+        loadingRoot.blocksRaycasts = false;
+        loadingRoot.interactable = false;
+        loadingObject.SetActive(false);
+
+        GameObject card = new GameObject("LoadingCard", typeof(RectTransform), typeof(Image));
+        card.transform.SetParent(loadingObject.transform, false);
+        RectTransform cardRect = card.GetComponent<RectTransform>();
+        cardRect.anchorMin = new Vector2(0.5f, 0.5f);
+        cardRect.anchorMax = new Vector2(0.5f, 0.5f);
+        cardRect.pivot = new Vector2(0.5f, 0.5f);
+        cardRect.sizeDelta = new Vector2(640f, 240f);
+        card.GetComponent<Image>().color = new Color(0.08f, 0.10f, 0.12f, 0.95f);
+
+        loadingProgressText = CreateTitle(card.transform, "Loading...", new Vector2(24f, -28f), 28, Color.white);
+        loadingProgressText.rectTransform.anchoredPosition = new Vector2(0f, -28f);
+        loadingProgressText.rectTransform.anchorMin = new Vector2(0.5f, 1f);
+        loadingProgressText.rectTransform.anchorMax = new Vector2(0.5f, 1f);
+        loadingProgressText.rectTransform.pivot = new Vector2(0.5f, 1f);
+        loadingProgressText.rectTransform.sizeDelta = new Vector2(580f, 44f);
+        loadingProgressText.alignment = TextAlignmentOptions.Center;
+
+        GameObject sliderObject = new GameObject("ProgressBar", typeof(RectTransform), typeof(Image), typeof(Slider));
+        sliderObject.transform.SetParent(card.transform, false);
+        RectTransform sliderRect = sliderObject.GetComponent<RectTransform>();
+        sliderRect.anchorMin = new Vector2(0.5f, 0.5f);
+        sliderRect.anchorMax = new Vector2(0.5f, 0.5f);
+        sliderRect.pivot = new Vector2(0.5f, 0.5f);
+        sliderRect.anchoredPosition = new Vector2(0f, -20f);
+        sliderRect.sizeDelta = new Vector2(520f, 28f);
+
+        Image sliderBackground = sliderObject.GetComponent<Image>();
+        sliderBackground.color = new Color(1f, 1f, 1f, 0.12f);
+
+        GameObject fillArea = new GameObject("Fill Area", typeof(RectTransform));
+        fillArea.transform.SetParent(sliderObject.transform, false);
+        RectTransform fillAreaRect = fillArea.GetComponent<RectTransform>();
+        fillAreaRect.anchorMin = new Vector2(0f, 0f);
+        fillAreaRect.anchorMax = new Vector2(1f, 1f);
+        fillAreaRect.offsetMin = new Vector2(6f, 6f);
+        fillAreaRect.offsetMax = new Vector2(-6f, -6f);
+
+        GameObject fill = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+        fill.transform.SetParent(fillArea.transform, false);
+        RectTransform fillRect = fill.GetComponent<RectTransform>();
+        fillRect.anchorMin = new Vector2(0f, 0f);
+        fillRect.anchorMax = new Vector2(1f, 1f);
+        fillRect.offsetMin = Vector2.zero;
+        fillRect.offsetMax = Vector2.zero;
+        fill.GetComponent<Image>().color = new Color(0.22f, 0.72f, 1f, 0.95f);
+
+        loadingProgressBar = sliderObject.GetComponent<Slider>();
+        loadingProgressBar.minValue = 0f;
+        loadingProgressBar.maxValue = 1f;
+        loadingProgressBar.value = 0f;
+        loadingProgressBar.interactable = false;
+        loadingProgressBar.fillRect = fillRect;
+        loadingProgressBar.targetGraphic = sliderBackground;
+        loadingProgressBar.direction = Slider.Direction.LeftToRight;
+    }
+
+    private static AudioClip CreateClickSoundClip()
+    {
+        const int sampleRate = 44100;
+        const float duration = 0.08f;
+        int samples = Mathf.CeilToInt(sampleRate * duration);
+        float[] data = new float[samples];
+        for (int i = 0; i < samples; i++)
+        {
+            float t = i / (float)sampleRate;
+            float env = Mathf.Exp(-t * 42f);
+            data[i] = Mathf.Sin(2f * Mathf.PI * 1200f * t) * env * 0.28f;
+        }
+
+        AudioClip clip = AudioClip.Create("MenuClick", samples, 1, sampleRate, false);
+        clip.SetData(data, 0);
+        return clip;
+    }
+
+    private static AudioClip CreateMenuMusicClip()
+    {
+        const int sampleRate = 44100;
+        const float duration = 12f;
+        int samples = Mathf.CeilToInt(sampleRate * duration);
+        float[] data = new float[samples];
+        float[] notes = { 110f, 138.59f, 164.81f, 220f };
+        for (int i = 0; i < samples; i++)
+        {
+            float t = i / (float)sampleRate;
+            int step = Mathf.FloorToInt((t / duration) * 8f) % notes.Length;
+            float baseFreq = notes[step];
+            float tone =
+                Mathf.Sin(2f * Mathf.PI * baseFreq * t) * 0.12f +
+                Mathf.Sin(2f * Mathf.PI * baseFreq * 0.5f * t) * 0.06f +
+                Mathf.Sin(2f * Mathf.PI * baseFreq * 2f * t) * 0.03f;
+            float pulse = 0.8f + 0.2f * Mathf.Sin(2f * Mathf.PI * 0.125f * t);
+            data[i] = tone * pulse;
+        }
+
+        AudioClip clip = AudioClip.Create("MenuMusic", samples, 1, sampleRate, false);
+        clip.SetData(data, 0);
+        return clip;
+    }
+
+    private void BuildMainMenu(Transform root, MenuController menuController)
+    {
+        CreateTitle(root, "BUS SIMULATOR", new Vector2(48f, -42f), 42);
+        CreateTitle(root, "AAA Career Menu", new Vector2(48f, -84f), 20, new Color(1f, 1f, 1f, 0.7f));
+
+        CreateProfilePanel(root);
+        CreateEventBanner(root, menuController);
+
+        GameObject buttonPanel = CreateFramedBox(root, "ButtonPanel", new Vector2(48f, -430f), new Vector2(360f, 470f));
+
+        string[] labels =
+        {
+            "Play", "Career", "Garage", "Routes", "Shop", "Settings", "Exit"
+        };
+        UnityEngine.Events.UnityAction[] actions =
+        {
+            menuController.OnPlayPressed,
+            menuController.OnCareerPressed,
+            menuController.OnGaragePressed,
+            menuController.OnRoutesPressed,
+            menuController.OnShopPressed,
+            menuController.OnSettingsPressed,
+            menuController.OnExitPressed
+        };
+
+        GameObject buttonColumn = new GameObject("ButtonColumn", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+        buttonColumn.transform.SetParent(buttonPanel.transform, false);
+        RectTransform buttonColumnRect = buttonColumn.GetComponent<RectTransform>();
+        buttonColumnRect.anchorMin = new Vector2(0.5f, 0.5f);
+        buttonColumnRect.anchorMax = new Vector2(0.5f, 0.5f);
+        buttonColumnRect.pivot = new Vector2(0.5f, 0.5f);
+        buttonColumnRect.anchoredPosition = Vector2.zero;
+        buttonColumnRect.sizeDelta = new Vector2(300f, 430f);
+
+        VerticalLayoutGroup layout = buttonColumn.GetComponent<VerticalLayoutGroup>();
+        layout.childAlignment = TextAnchor.MiddleCenter;
+        layout.childControlHeight = true;
+        layout.childControlWidth = true;
+        layout.childForceExpandHeight = false;
+        layout.childForceExpandWidth = true;
+        layout.spacing = 25f;
+
+        ContentSizeFitter fitter = buttonColumn.GetComponent<ContentSizeFitter>();
+        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        for (int i = 0; i < labels.Length; i++)
+        {
+            Button button = CreateUIButton(buttonColumn.transform, labels[i]);
+            button.onClick.AddListener(actions[i]);
+        }
+    }
+
+    private void BuildHudScreen(Transform root)
+    {
+        GameObject hudPanelObject = new GameObject("HudPanel", typeof(RectTransform), typeof(CanvasGroup), typeof(Image));
+        hudPanelObject.transform.SetParent(root, false);
+        RectTransform panelRect = hudPanelObject.GetComponent<RectTransform>();
+        panelRect.anchorMin = new Vector2(0f, 1f);
+        panelRect.anchorMax = new Vector2(0f, 1f);
+        panelRect.pivot = new Vector2(0f, 1f);
+        panelRect.anchoredPosition = new Vector2(18f, -18f);
+        panelRect.sizeDelta = new Vector2(500f, 170f);
+        hudPanelObject.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.56f);
+
+        CanvasGroup hudGroup = hudPanelObject.GetComponent<CanvasGroup>();
+        CanvasGroup warningGroup = new GameObject("WarningGroup", typeof(RectTransform), typeof(CanvasGroup)).GetComponent<CanvasGroup>();
+        warningGroup.transform.SetParent(hudPanelObject.transform, false);
+
+        TMP_Text speed = CreateTMPText(hudPanelObject.transform, "SpeedText", "Speed: 0 km/h", 24, new Vector2(18f, -12f));
+        TMP_Text gear = CreateTMPText(hudPanelObject.transform, "GearText", "Gear: N", 24, new Vector2(18f, -42f));
+        TMP_Text fuel = CreateTMPText(hudPanelObject.transform, "FuelText", "Fuel: 100%", 22, new Vector2(18f, -72f));
+        TMP_Text passengers = CreateTMPText(hudPanelObject.transform, "PassengersText", "Passengers: 0/0", 22, new Vector2(18f, -100f));
+        TMP_Text distance = CreateTMPText(hudPanelObject.transform, "DistanceText", "Distance: 0.0 km", 20, new Vector2(260f, -12f));
+        TMP_Text time = CreateTMPText(hudPanelObject.transform, "TimeText", "Time: 0 min", 20, new Vector2(260f, -40f));
+        TMP_Text miniMapLabel = CreateTMPText(hudPanelObject.transform, "MiniMapLabel", "Mini-map", 18, new Vector2(260f, -68f));
+        TMP_Text warning = CreateTMPText(hudPanelObject.transform, "WarningText", string.Empty, 20, new Vector2(260f, -96f), new Color(1f, 0.65f, 0.65f));
+        Image miniMap = CreateMiniMapPlaceholder(hudPanelObject.transform);
+
+        // Runtime HUD is visual-only here; the legacy HUD text remains driven by the existing bootstrap flow.
+    }
+
+    private void BuildPauseScreen(Transform root, MenuController menuController)
+    {
+        CreateCenteredPanel(root, "PauseTitle", "Paused", 34, new Vector2(0f, 180f));
+        CreateStackedButtons(root, new[]
+        {
+            ("ResumeButton", "Resume", (UnityEngine.Events.UnityAction)menuController.OnResumePressed),
+            ("RestartButton", "Restart", (UnityEngine.Events.UnityAction)menuController.OnRestartPressed),
+            ("PauseSettingsButton", "Settings", (UnityEngine.Events.UnityAction)menuController.OnPauseSettingsPressed),
+            ("ExitMainMenuButton", "Exit to Main Menu", (UnityEngine.Events.UnityAction)menuController.OnExitToMainMenuPressed)
+        }, new Vector2(0f, 40f));
+    }
+
+    private void BuildSettingsScreen(Transform root, MenuController menuController)
+    {
+        CreateCenteredPanel(root, "SettingsTitle", "Settings", 34, new Vector2(0f, 220f));
+        CreateLabeledDropdown(root, "GraphicsDropdown", "Graphics", new[] { "Low", "Medium", "High", "Ultra" }, new Vector2(-240f, 110f));
+        CreateLabeledSlider(root, "MasterVolume", "Master Volume", new Vector2(-240f, 40f));
+        CreateLabeledSlider(root, "MusicVolume", "Music Volume", new Vector2(-240f, -30f));
+        CreateLabeledSlider(root, "SfxVolume", "SFX Volume", new Vector2(-240f, -100f));
+        CreateKeyBindingField(root, "ForwardKey", "Forward", "W", new Vector2(150f, 110f));
+        CreateKeyBindingField(root, "BackKey", "Back", "S", new Vector2(150f, 40f));
+        CreateKeyBindingField(root, "LeftKey", "Left", "A", new Vector2(150f, -30f));
+        CreateKeyBindingField(root, "RightKey", "Right", "D", new Vector2(150f, -100f));
+        CreateKeyBindingField(root, "BrakeKey", "Brake", "Space", new Vector2(150f, -170f));
+        Button saveButton = CreateUIButton(root, "Save Button");
+        saveButton.GetComponentInChildren<TMP_Text>().text = "Save";
+        RectTransform saveRect = saveButton.GetComponent<RectTransform>();
+        saveRect.anchorMin = new Vector2(0.5f, 0f);
+        saveRect.anchorMax = new Vector2(0.5f, 0f);
+        saveRect.pivot = new Vector2(0.5f, 0f);
+        saveRect.anchoredPosition = new Vector2(0f, 40f);
+        saveRect.sizeDelta = new Vector2(220f, 56f);
+        saveButton.onClick.AddListener(menuController.SaveSettings);
+    }
+
+    private void BuildGarageScreen(Transform root, MenuController menuController)
+    {
+        CreateCenteredPanel(root, "GarageTitle", "Garage", 34, new Vector2(0f, 220f));
+        CreateScrollContent(root, "Content", new Vector2(-300f, -10f));
+        CreateLabelBlock(root, "SelectedName", "Select a bus", new Vector2(220f, 90f), 26);
+        CreateLabelBlock(root, "Stats", "Stats...", new Vector2(220f, 20f), 20);
+        Button select = CreateUIButton(root, "SelectButton");
+        select.GetComponentInChildren<TMP_Text>().text = "Select Bus";
+        PositionButton(select, new Vector2(220f, -120f));
+        select.onClick.AddListener(() => menuController.ApplySelectedBus(0));
+
+        Button upgrade = CreateUIButton(root, "UpgradeButton");
+        upgrade.GetComponentInChildren<TMP_Text>().text = "Upgrade";
+        PositionButton(upgrade, new Vector2(220f, -190f));
+        upgrade.onClick.AddListener(menuController.UpgradeSelectedBus);
+    }
+
+    private void BuildRoutesScreen(Transform root, MenuController menuController)
+    {
+        CreateCenteredPanel(root, "RoutesTitle", "Routes", 34, new Vector2(0f, 220f));
+        CreateScrollContent(root, "Content", new Vector2(-300f, -10f));
+        CreateLabelBlock(root, "SelectedName", "Select a route", new Vector2(220f, 90f), 26);
+        CreateLabelBlock(root, "Details", "Route details...", new Vector2(220f, 10f), 20);
+        Button start = CreateUIButton(root, "StartButton");
+        start.GetComponentInChildren<TMP_Text>().text = "Start Journey";
+        PositionButton(start, new Vector2(220f, -140f));
+        start.onClick.AddListener(menuController.StartSelectedRoute);
+    }
+
+    private void BuildShopScreen(Transform root, MenuController menuController)
+    {
+        CreateCenteredPanel(root, "ShopTitle", "Shop", 34, new Vector2(0f, 220f));
+        CreateScrollContent(root, "Content", new Vector2(-300f, -10f));
+        CreateLabelBlock(root, "Currency", "Balance: 0", new Vector2(220f, 90f), 24);
+        Button purchase = CreateUIButton(root, "PurchaseButton");
+        purchase.GetComponentInChildren<TMP_Text>().text = "Buy";
+        PositionButton(purchase, new Vector2(220f, -40f));
+        purchase.onClick.AddListener(menuController.PurchaseSelectedItem);
+    }
+
+    private void CreateProfilePanel(Transform root)
+    {
+        GameObject panel = CreateFramedBox(root, "ProfilePanel", new Vector2(48f, -150f), new Vector2(360f, 120f));
+        CreateLabelBlock(panel.transform, "PlayerName", "Driver", new Vector2(24f, 36f), 24);
+        CreateLabelBlock(panel.transform, "PlayerLevel", "Level 1", new Vector2(24f, 6f), 20);
+        CreateLabelBlock(panel.transform, "PlayerCoins", "5,000 Coins", new Vector2(24f, -24f), 20);
+    }
+
+    private void CreateEventBanner(Transform root, MenuController menuController)
+    {
+        GameObject banner = CreateFramedBox(root, "EventBanner", new Vector2(48f, -290f), new Vector2(360f, 100f));
+        CreateLabelBlock(banner.transform, "EventTitle", "Weekend Double Rewards", new Vector2(20f, 24f), 22);
+        CreateLabelBlock(banner.transform, "EventBody", "Complete mountain routes for extra coins.", new Vector2(20f, -6f), 16);
+    }
+
+    private static void CreateCenteredPanel(Transform root, string titleName, string title, int size, Vector2 anchoredPosition)
+    {
+        GameObject panel = CreateFramedBox(root, titleName + "_Panel", anchoredPosition, new Vector2(480f, 70f));
+        CreateLabelBlock(panel.transform, titleName, title, new Vector2(20f, 18f), size);
+    }
+
+    private static TMP_Text CreateTitle(Transform root, string title, Vector2 anchoredPosition, int size)
+    {
+        return CreateTitle(root, title, anchoredPosition, size, Color.white);
+    }
+
+    private static TMP_Text CreateTitle(Transform root, string title, Vector2 anchoredPosition, int size, Color color)
+    {
+        GameObject titleObject = new GameObject(title.Replace(" ", string.Empty) + "Title", typeof(RectTransform), typeof(TextMeshProUGUI));
+        titleObject.transform.SetParent(root, false);
+
+        RectTransform rect = titleObject.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = new Vector2(520f, 52f);
+
+        TMP_Text tmp = titleObject.GetComponent<TMP_Text>();
+        tmp.text = title;
+        tmp.fontSize = size;
+        tmp.color = color;
+        TMP_FontAsset defaultFont = GetSafeDefaultFontAsset();
+        if (defaultFont != null)
+        {
+            tmp.font = defaultFont;
+        }
+        return tmp;
+    }
+
+    private static GameObject CreateFramedBox(Transform parent, string name, Vector2 anchoredPosition, Vector2 size)
+    {
+        GameObject box = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(CanvasGroup));
+        box.transform.SetParent(parent, false);
+        RectTransform rect = box.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = size;
+        box.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.38f);
+        return box;
+    }
+
+    private static TMP_Text CreateLabelBlock(Transform parent, string name, string text, Vector2 anchoredPosition, int size, Color? color = null)
+    {
+        GameObject label = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+        label.transform.SetParent(parent, false);
+        RectTransform rect = label.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = new Vector2(420f, 40f);
+        TMP_Text tmp = label.GetComponent<TMP_Text>();
+        tmp.text = text;
+        tmp.fontSize = size;
+        tmp.color = color ?? Color.white;
+        TMP_FontAsset defaultFont = GetSafeDefaultFontAsset();
+        if (defaultFont != null)
+        {
+            tmp.font = defaultFont;
+        }
+        return tmp;
+    }
+
+    private static TMP_Text CreateTMPText(Transform parent, string name, string text, int size, Vector2 anchoredPosition, Color? color = null)
+    {
+        GameObject label = new GameObject(name, typeof(RectTransform), typeof(TextMeshProUGUI));
+        label.transform.SetParent(parent, false);
+        RectTransform rect = label.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = new Vector2(220f, 30f);
+        TMP_Text tmp = label.GetComponent<TMP_Text>();
+        tmp.text = text;
+        tmp.fontSize = size;
+        tmp.color = color ?? Color.white;
+        TMP_FontAsset defaultFont = GetSafeDefaultFontAsset();
+        if (defaultFont != null)
+        {
+            tmp.font = defaultFont;
+        }
+        return tmp;
+    }
+
+    private static Button CreateUIButton(Transform parent, string name)
+    {
+        GameObject buttonObject = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
+        buttonObject.transform.SetParent(parent, false);
+        Image image = buttonObject.GetComponent<Image>();
+        image.color = new Color(0.12f, 0.15f, 0.18f, 0.86f);
+        RectTransform rect = buttonObject.GetComponent<RectTransform>();
+        rect.sizeDelta = new Vector2(260f, 58f);
+
+        TMP_Text label = CreateLabelBlock(buttonObject.transform, "Label", name, new Vector2(0f, 0f), 20);
+        label.alignment = TextAlignmentOptions.Center;
+        label.rectTransform.anchorMin = Vector2.zero;
+        label.rectTransform.anchorMax = Vector2.one;
+        label.rectTransform.offsetMin = Vector2.zero;
+        label.rectTransform.offsetMax = Vector2.zero;
+        Button button = buttonObject.GetComponent<Button>();
+        button.transition = Selectable.Transition.ColorTint;
+        ColorBlock colors = button.colors;
+        colors.normalColor = new Color(0.18f, 0.21f, 0.25f, 0.96f);
+        colors.highlightedColor = new Color(0.26f, 0.30f, 0.35f, 1f);
+        colors.pressedColor = new Color(0.10f, 0.55f, 0.95f, 1f);
+        colors.selectedColor = new Color(0.20f, 0.24f, 0.29f, 1f);
+        colors.disabledColor = new Color(0.10f, 0.10f, 0.10f, 0.5f);
+        colors.colorMultiplier = 1f;
+        colors.fadeDuration = 0.12f;
+        button.colors = colors;
+        buttonObject.AddComponent<MenuButtonAnimator>();
+        return button;
+    }
+
+    private static void PositionButton(Button button, Vector2 anchoredPosition)
+    {
+        RectTransform rect = button.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0.5f, 0f);
+        rect.anchorMax = new Vector2(0.5f, 0f);
+        rect.pivot = new Vector2(0.5f, 0f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = new Vector2(220f, 54f);
+    }
+
+    private static Image CreateMiniMapPlaceholder(Transform parent)
+    {
+        GameObject miniMap = new GameObject("MiniMapPlaceholder", typeof(RectTransform), typeof(Image));
+        miniMap.transform.SetParent(parent, false);
+        RectTransform rect = miniMap.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(1f, 1f);
+        rect.anchorMax = new Vector2(1f, 1f);
+        rect.pivot = new Vector2(1f, 1f);
+        rect.anchoredPosition = new Vector2(-20f, -20f);
+        rect.sizeDelta = new Vector2(120f, 120f);
+        Image image = miniMap.GetComponent<Image>();
+        image.color = new Color(0.2f, 0.26f, 0.3f, 0.45f);
+        return image;
+    }
+
+    private static void CreateStackedButtons(Transform root, (string name, string label, UnityEngine.Events.UnityAction action)[] buttons, Vector2 startOffset)
+    {
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            Button button = CreateUIButton(root, buttons[i].name);
+            button.GetComponentInChildren<TMP_Text>().text = buttons[i].label;
+            PositionButton(button, startOffset + new Vector2(0f, -i * 70f));
+            button.onClick.AddListener(buttons[i].action);
+        }
+    }
+
+    private static void CreateLabeledDropdown(Transform root, string name, string label, string[] options, Vector2 position)
+    {
+        CreateLabelBlock(root, name + "_Label", label, position + new Vector2(0f, 34f), 20);
+        GameObject dropdownObject = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(TMP_Dropdown));
+        dropdownObject.transform.SetParent(root, false);
+        RectTransform rect = dropdownObject.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = new Vector2(220f, 32f);
+        dropdownObject.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.12f);
+        TMP_Dropdown dropdown = dropdownObject.GetComponent<TMP_Dropdown>();
+        dropdown.options.Clear();
+        for (int i = 0; i < options.Length; i++)
+        {
+            dropdown.options.Add(new TMP_Dropdown.OptionData(options[i]));
+        }
+    }
+
+    private static void CreateLabeledSlider(Transform root, string name, string label, Vector2 position)
+    {
+        CreateLabelBlock(root, name + "_Label", label, position + new Vector2(0f, 34f), 20);
+        GameObject sliderObject = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Slider));
+        sliderObject.transform.SetParent(root, false);
+        RectTransform rect = sliderObject.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = new Vector2(220f, 20f);
+        sliderObject.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.12f);
+        Slider slider = sliderObject.GetComponent<Slider>();
+        slider.minValue = 0f;
+        slider.maxValue = 1f;
+        slider.value = 0.8f;
+    }
+
+    private static void CreateKeyBindingField(Transform root, string name, string label, string defaultValue, Vector2 position)
+    {
+        CreateLabelBlock(root, name + "_Label", label, position + new Vector2(0f, 34f), 20);
+        GameObject inputObject = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(TMP_InputField));
+        inputObject.transform.SetParent(root, false);
+        RectTransform rect = inputObject.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = position;
+        rect.sizeDelta = new Vector2(220f, 32f);
+        inputObject.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.12f);
+        TMP_InputField field = inputObject.GetComponent<TMP_InputField>();
+        field.text = defaultValue;
+
+        GameObject textObj = new GameObject("Text", typeof(RectTransform), typeof(TextMeshProUGUI));
+        textObj.transform.SetParent(inputObject.transform, false);
+        TMP_Text text = textObj.GetComponent<TMP_Text>();
+        text.text = defaultValue;
+        text.fontSize = 18f;
+        text.alignment = TextAlignmentOptions.Left;
+        TMP_FontAsset defaultFont = GetSafeDefaultFontAsset();
+        if (defaultFont != null)
+        {
+            text.font = defaultFont;
+        }
+        field.textComponent = text;
+    }
+
+    private static TMP_FontAsset GetSafeDefaultFontAsset()
+    {
+        try
+        {
+            return TMP_Settings.defaultFontAsset;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void CreateScrollContent(Transform root, string name, Vector2 anchoredPosition)
+    {
+        GameObject scroll = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Mask), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+        scroll.transform.SetParent(root, false);
+        RectTransform rect = scroll.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0f, 0.5f);
+        rect.anchorMax = new Vector2(0f, 0.5f);
+        rect.pivot = new Vector2(0f, 0.5f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = new Vector2(320f, 420f);
+        scroll.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.08f);
+
+        VerticalLayoutGroup layout = scroll.GetComponent<VerticalLayoutGroup>();
+        layout.childControlHeight = true;
+        layout.childControlWidth = true;
+        layout.childForceExpandHeight = false;
+        layout.childForceExpandWidth = true;
+        layout.spacing = 8f;
+
+        ContentSizeFitter fitter = scroll.GetComponent<ContentSizeFitter>();
+        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+    }
+
+    private static TMP_Text FindText(Transform root, string name)
+    {
+        Transform child = root.Find(name);
+        return child != null ? child.GetComponent<TMP_Text>() : null;
+    }
+
+    private static Transform FindTransform(Transform root, string name)
+    {
+        return root.Find(name);
+    }
+
+    private static Button FindButton(Transform root, string name)
+    {
+        Transform child = root.Find(name);
+        return child != null ? child.GetComponent<Button>() : null;
+    }
+
+    private static TMP_Dropdown FindDropdown(Transform root, string name)
+    {
+        Transform child = root.Find(name);
+        return child != null ? child.GetComponent<TMP_Dropdown>() : null;
+    }
+
+    private static Slider FindSlider(Transform root, string name)
+    {
+        Transform child = root.Find(name);
+        return child != null ? child.GetComponent<Slider>() : null;
+    }
+
+    private static TMP_InputField FindInput(Transform root, string name)
+    {
+        Transform child = root.Find(name);
+        return child != null ? child.GetComponent<TMP_InputField>() : null;
+    }
+
+    private static void WireMainMenuButtons(Transform root, MenuController menuController)
+    {
+        string[] names =
+        {
+            "Play",
+            "Career",
+            "Garage",
+            "Routes",
+            "Shop",
+            "Settings",
+            "Exit"
+        };
+
+        UnityEngine.Events.UnityAction[] actions =
+        {
+            menuController.OnPlayPressed,
+            menuController.OnCareerPressed,
+            menuController.OnGaragePressed,
+            menuController.OnRoutesPressed,
+            menuController.OnShopPressed,
+            menuController.OnSettingsPressed,
+            menuController.OnExitPressed
+        };
+
+        for (int i = 0; i < names.Length; i++)
+        {
+            Button button = FindButton(root, names[i]);
+            if (button != null)
+            {
+                button.onClick.RemoveAllListeners();
+                button.onClick.AddListener(actions[i]);
+            }
+        }
+    }
+}
