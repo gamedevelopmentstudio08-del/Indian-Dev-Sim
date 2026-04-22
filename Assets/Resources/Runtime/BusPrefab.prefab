@@ -1,4 +1,4 @@
-﻿%YAML 1.1
+%YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
 --- !u!1 &391608439373413694
 GameObject:
@@ -430,7 +430,7 @@ GameObject:
   m_Component:
   - component: {fileID: 6457791343394576015}
   m_Layer: 0
-  m_Name: bus
+  m_Name: BusPrefab
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -2102,4 +2102,3 @@ MeshRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 0
   m_AdditionalVertexStreams: {fileID: 0}
-
