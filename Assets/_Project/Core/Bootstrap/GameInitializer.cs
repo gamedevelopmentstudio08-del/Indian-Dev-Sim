@@ -5,8 +5,6 @@ using UnityEngine.UI;
 public sealed class GameInitializer : MonoBehaviour
 {
     [SerializeField] private GameObject busPrefab;
-    [SerializeField] private float routeLineHeight = 0.25f;
-
     private System.Collections.IEnumerator Start()
     {
         Debug.Log("GameScene Loaded");
@@ -49,71 +47,9 @@ public sealed class GameInitializer : MonoBehaviour
             };
         }
 
-        Vector3 spawnPosition = new Vector3(GameData.StartPosition.x, busTransform.position.y, GameData.StartPosition.z);
-        busTransform.position = spawnPosition;
-        busTransform.rotation = GetBusRotation();
-
-        Rigidbody rb = busTransform.GetComponent<Rigidbody>();
-        if (rb != null)
-        {
-            rb.velocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-        }
-
-        CreateBusStand(spawnPosition);
-        DrawRouteLine();
+        CreateBusStand(busTransform.position);
+        EnsureRouteGuidance();
         SetupMinimap(busTransform);
-    }
-
-    private Transform ResolveBus()
-    {
-        GameObject existingBus = null;
-        try
-        {
-            existingBus = GameObject.FindGameObjectWithTag("Player");
-        }
-        catch (UnityException)
-        {
-        }
-
-        if (existingBus != null)
-        {
-            return existingBus.transform;
-        }
-
-        if (busPrefab != null)
-        {
-            GameObject instance = Instantiate(busPrefab);
-            try
-            {
-                instance.tag = "Player";
-            }
-            catch (UnityException)
-            {
-            }
-
-            return instance.transform;
-        }
-
-        SimpleBusController controller = FindObjectOfType<SimpleBusController>();
-        return controller != null ? controller.transform : null;
-    }
-
-    private Quaternion GetBusRotation()
-    {
-        Vector3 direction = GameData.EndPosition - GameData.StartPosition;
-        if (GameData.PathPoints != null && GameData.PathPoints.Count >= 2)
-        {
-            direction = GameData.PathPoints[1] - GameData.PathPoints[0];
-        }
-
-        direction.y = 0f;
-        if (direction.sqrMagnitude < 0.01f)
-        {
-            direction = Vector3.forward;
-        }
-
-        return Quaternion.LookRotation(direction.normalized, Vector3.up);
     }
 
     private void CreateBusStand(Vector3 spawnPosition)
@@ -157,26 +93,49 @@ public sealed class GameInitializer : MonoBehaviour
         }
     }
 
-    private void DrawRouteLine()
+    private Transform ResolveBus()
     {
-        if (GameData.PathPoints == null || GameData.PathPoints.Count == 0)
+        GameObject existingBus = null;
+        try
+        {
+            existingBus = GameObject.FindGameObjectWithTag("Player");
+        }
+        catch (UnityException)
+        {
+        }
+
+        if (existingBus != null)
+        {
+            return existingBus.transform;
+        }
+
+        if (busPrefab != null)
+        {
+            GameObject instance = Instantiate(busPrefab);
+            try
+            {
+                instance.tag = "Player";
+            }
+            catch (UnityException)
+            {
+            }
+
+            return instance.transform;
+        }
+
+        SimpleBusController controller = FindObjectOfType<SimpleBusController>();
+        return controller != null ? controller.transform : null;
+    }
+
+    private static void EnsureRouteGuidance()
+    {
+        if (FindObjectOfType<RouteGuidanceSystem>() != null)
         {
             return;
         }
 
-        GameObject lineObject = new GameObject("RouteLine");
-        LineRenderer line = lineObject.AddComponent<LineRenderer>();
-        line.material = new Material(Shader.Find("Sprites/Default"));
-        line.widthMultiplier = 1f;
-        line.positionCount = GameData.PathPoints.Count;
-        line.startColor = new Color(0.1f, 0.75f, 1f, 1f);
-        line.endColor = new Color(1f, 0.85f, 0.2f, 1f);
-
-        for (int i = 0; i < GameData.PathPoints.Count; i++)
-        {
-            Vector3 point = GameData.PathPoints[i];
-            line.SetPosition(i, new Vector3(point.x, point.y + routeLineHeight, point.z));
-        }
+        GameObject go = new GameObject("RouteGuidanceRoot");
+        go.AddComponent<RouteGuidanceSystem>();
     }
 
     private void SetupMinimap(Transform busTransform)
@@ -186,10 +145,14 @@ public sealed class GameInitializer : MonoBehaviour
         minimapCamera.orthographicSize = 90f;
         minimapCamera.clearFlags = CameraClearFlags.SolidColor;
         minimapCamera.backgroundColor = new Color(0.08f, 0.10f, 0.12f, 1f);
+        minimapCamera.nearClipPlane = 0.1f;
+        minimapCamera.farClipPlane = 3000f;
+        minimapCamera.cullingMask = LayerMask.GetMask("Default", "Bus", "Traffic", "Environment", "Ground", "Minimap");
         minimapCamera.targetTexture = new RenderTexture(512, 512, 16);
 
         MinimapFollow follow = minimapCamera.gameObject.AddComponent<MinimapFollow>();
         follow.SetTarget(busTransform);
+        minimapCamera.Render();
 
         Canvas canvas = SceneUiHelper.EnsureOverlayCanvas("GameplayCanvas");
         RawImage minimap = CreateOrGetMinimapImage(canvas.transform);
@@ -219,6 +182,11 @@ public sealed class GameInitializer : MonoBehaviour
     private static void AutoCreateInGameScene()
     {
         if (SceneManager.GetActiveScene().name != "GameScene")
+        {
+            return;
+        }
+
+        if (FindObjectOfType<GameBootstrap>() != null)
         {
             return;
         }

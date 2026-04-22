@@ -47,7 +47,7 @@ public sealed class BusSpawner : MonoBehaviour
 
         Vector3 spawnPosition = spawnPoint.position;
         spawnPosition.y = Mathf.Max(spawnPosition.y, minimumSpawnHeight);
-        Quaternion spawnRotation = Quaternion.Euler(0f, 0f, 0f);
+        Quaternion spawnRotation = spawnPoint.rotation;
 
         spawnedBus = Instantiate(busPrefab, spawnPosition, spawnRotation);
         spawnedBus.name = "PlayerBus";

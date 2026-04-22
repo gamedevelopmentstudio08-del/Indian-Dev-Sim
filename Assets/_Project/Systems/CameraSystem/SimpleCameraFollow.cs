@@ -5,12 +5,11 @@ public class SimpleCameraFollow : MonoBehaviour
     public enum CameraView
     {
         Chase = 0,
-        Driver = 1,
-        Side = 2,
-        Overhead = 3
+        Driver = 1
     }
 
     public Transform target;
+    public Transform driverSeat;
     public CameraView currentView = CameraView.Chase;
     public Vector3 offset = new Vector3(0f, 3.5f, -8f);
     public Vector3 lookOffset = new Vector3(0f, 1.8f, 4.5f);
@@ -18,15 +17,12 @@ public class SimpleCameraFollow : MonoBehaviour
     public bool rotateWithBus = true;
     public float perspectiveFieldOfView = 60f;
     public float driverFieldOfView = 66f;
-    public float sideFieldOfView = 62f;
-    public float overheadFieldOfView = 72f;
     public KeyCode cycleViewKey = KeyCode.C;
     public KeyCode chaseViewKey = KeyCode.Alpha1;
     public KeyCode driverViewKey = KeyCode.Alpha2;
-    public KeyCode sideViewKey = KeyCode.Alpha3;
-    public KeyCode overheadViewKey = KeyCode.Alpha4;
 
     private bool hasSnappedToTarget;
+    private bool skipSmoothingThisFrame;
     private Camera cameraComponent;
 
     private void Awake()
@@ -49,20 +45,23 @@ public class SimpleCameraFollow : MonoBehaviour
         {
             SetView((int)CameraView.Driver);
         }
-        else if (IsKeyDown(sideViewKey))
-        {
-            SetView((int)CameraView.Side);
-        }
-        else if (IsKeyDown(overheadViewKey))
-        {
-            SetView((int)CameraView.Overhead);
-        }
     }
 
     private void LateUpdate()
     {
         if (target == null)
         {
+            target = ResolveTarget();
+            if (target == null)
+            {
+                return;
+            }
+        }
+
+        if (skipSmoothingThisFrame)
+        {
+            skipSmoothingThisFrame = false;
+            SnapToTarget();
             return;
         }
 
@@ -93,11 +92,12 @@ public class SimpleCameraFollow : MonoBehaviour
     {
         target = newTarget;
         hasSnappedToTarget = false;
+        skipSmoothingThisFrame = true;
     }
 
     public void SetView(int viewIndex)
     {
-        int normalizedIndex = ((viewIndex % 4) + 4) % 4;
+        int normalizedIndex = ((viewIndex % 2) + 2) % 2;
         currentView = (CameraView)normalizedIndex;
         ApplyViewSettings(currentView);
         hasSnappedToTarget = false;
@@ -125,12 +125,22 @@ public class SimpleCameraFollow : MonoBehaviour
 
     private Vector3 GetTargetPosition()
     {
-        return rotateWithBus ? target.TransformPoint(offset) : target.position + offset;
+        if (currentView == CameraView.Driver && driverSeat != null)
+        {
+            return driverSeat.position;
+        }
+
+        return rotateWithBus ? target.position + target.rotation * offset : target.position + offset;
     }
 
     private Vector3 GetLookPoint()
     {
-        return rotateWithBus ? target.TransformPoint(lookOffset) : target.position + lookOffset;
+        if (currentView == CameraView.Driver && driverSeat != null)
+        {
+            return driverSeat.position + driverSeat.forward * 8f;
+        }
+
+        return rotateWithBus ? target.position + target.rotation * lookOffset : target.position + lookOffset;
     }
 
     private void ApplyViewSettings(CameraView view)
@@ -143,18 +153,6 @@ public class SimpleCameraFollow : MonoBehaviour
                 rotateWithBus = true;
                 SetFieldOfView(driverFieldOfView);
                 break;
-            case CameraView.Side:
-                offset = new Vector3(5.8f, 3.1f, 0.2f);
-                lookOffset = new Vector3(0f, 1.8f, 1.8f);
-                rotateWithBus = true;
-                SetFieldOfView(sideFieldOfView);
-                break;
-            case CameraView.Overhead:
-                offset = new Vector3(0f, 16f, -2f);
-                lookOffset = new Vector3(0f, 0.8f, 6f);
-                rotateWithBus = false;
-                SetFieldOfView(overheadFieldOfView);
-                break;
             case CameraView.Chase:
             default:
                 offset = new Vector3(0f, 3.5f, -8f);
@@ -163,6 +161,25 @@ public class SimpleCameraFollow : MonoBehaviour
                 SetFieldOfView(perspectiveFieldOfView);
                 break;
         }
+    }
+
+    public void SnapAfterBusReset()
+    {
+        hasSnappedToTarget = false;
+        SnapToTarget();
+        skipSmoothingThisFrame = true;
+    }
+
+    private Transform ResolveTarget()
+    {
+        GameObject player = GameObject.FindGameObjectWithTag("Player");
+        if (player != null)
+        {
+            return player.transform;
+        }
+
+        SimpleBusController busController = FindObjectOfType<SimpleBusController>();
+        return busController != null ? busController.transform : null;
     }
 
     private void SetFieldOfView(float value)

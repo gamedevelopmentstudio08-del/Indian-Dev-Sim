@@ -4,10 +4,10 @@ public class SimpleBusController : MonoBehaviour
 {
     public float speed = 28f;
     public float reverseSpeed = 14f;
-    public float maxForwardSpeed = 95f / 3.6f;
-    public float maxReverseSpeed = 8f;
-    public float hardMaxSpeedKmh = 200f;
-    public float overSpeedBrakeKmh = 185f;
+    public float maxForwardSpeed = 120f / 3.6f;
+    public float maxReverseSpeed = 12f;
+    public float hardMaxSpeedKmh = 120f;
+    public float overSpeedBrakeKmh = 112f;
     public bool useWheelColliderDrive = false;
     public float rotationSpeed = 20f;
     public float brakingForce = 10f;
@@ -68,6 +68,9 @@ public class SimpleBusController : MonoBehaviour
         rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         rb.maxAngularVelocity = 1.5f;
+        maxForwardSpeed = 120f / 3.6f;
+        hardMaxSpeedKmh = 120f;
+        overSpeedBrakeKmh = 112f;
 
         busCollider = GetComponent<Collider>();
         if (busCollider == null)
@@ -124,19 +127,6 @@ public class SimpleBusController : MonoBehaviour
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
 
         UpdateGroundedState();
-        ClampVerticalVelocity();
-
-        if (useWheelColliderDrive && wheelColliders != null && wheelColliders.Length >= 4)
-        {
-            float steerRate = Mathf.Abs(steerInput) > 0.01f ? steeringResponse : steeringReturnSpeed;
-            steering = Mathf.MoveTowards(steering, steerInput, steerRate * Time.fixedDeltaTime);
-            DriveWithWheelColliders();
-            ApplyLowSpeedSteeringAssist();
-            ApplyHighSpeedProtection();
-            UpdateGear();
-            return;
-        }
-
         DriveArcade();
         UpdateGear();
     }
@@ -145,22 +135,22 @@ public class SimpleBusController : MonoBehaviour
     {
         float speedLimit = hardMaxSpeedKmh / 3.6f;
         float desiredForwardSpeed = 0f;
-        float acceleration = brakingForce;
+        float acceleration = Mathf.Lerp(3.5f, 8.5f, Mathf.InverseLerp(0f, 5f, currentGear));
 
         if (Input.GetKey(KeyCode.Space))
         {
             desiredForwardSpeed = 0f;
-            acceleration = brakingForce * 3f;
+            acceleration = brakingForce * 2.2f;
         }
         else if (throttle > 0f)
         {
-            desiredForwardSpeed = maxForwardSpeed;
-            acceleration = speed * GetHillAssistMultiplier();
+            desiredForwardSpeed = GetGearSpeedCap(currentGear);
+            acceleration = Mathf.Max(acceleration, 2.5f * GetHillAssistMultiplier());
         }
         else if (throttle < 0f)
         {
             desiredForwardSpeed = -maxReverseSpeed;
-            acceleration = reverseSpeed;
+            acceleration = Mathf.Max(2.5f, reverseSpeed * 0.3f);
         }
 
         currentForwardSpeed = Mathf.MoveTowards(
@@ -183,10 +173,12 @@ public class SimpleBusController : MonoBehaviour
         Quaternion targetRotation = Quaternion.Euler(0f, currentYaw, 0f);
         rb.MoveRotation(targetRotation);
 
+        Vector3 move = targetRotation * Vector3.forward * currentForwardSpeed;
+        rb.velocity = new Vector3(move.x, Mathf.Min(rb.velocity.y, 0f), move.z);
+        rb.angularVelocity = Vector3.zero;
+
         if (isGrounded)
         {
-            Vector3 move = targetRotation * Vector3.forward * currentForwardSpeed;
-            rb.velocity = new Vector3(move.x, rb.velocity.y, move.z);
             if (Mathf.Abs(currentForwardSpeed) > 0.1f)
             {
                 rb.AddForce(Vector3.down * downforceStrength, ForceMode.Force);
@@ -194,6 +186,26 @@ public class SimpleBusController : MonoBehaviour
         }
 
         ClampVerticalVelocity();
+    }
+
+    private float GetGearSpeedCap(int gear)
+    {
+        switch (gear)
+        {
+            case -1:
+                return maxReverseSpeed;
+            case 0:
+            case 1:
+                return 25f / 3.6f;
+            case 2:
+                return 45f / 3.6f;
+            case 3:
+                return 65f / 3.6f;
+            case 4:
+                return 90f / 3.6f;
+            default:
+                return maxForwardSpeed;
+        }
     }
 
     private void DriveWithWheelColliders()
@@ -408,17 +420,17 @@ public class SimpleBusController : MonoBehaviour
             currentGear = 1;
             gearText = "1";
         }
-        else if (speedKmh < 35f)
+        else if (speedKmh < 40f)
         {
             currentGear = 2;
             gearText = "2";
         }
-        else if (speedKmh < 50f)
+        else if (speedKmh < 65f)
         {
             currentGear = 3;
             gearText = "3";
         }
-        else if (speedKmh < 70f)
+        else if (speedKmh < 90f)
         {
             currentGear = 4;
             gearText = "4";
@@ -443,6 +455,12 @@ public class SimpleBusController : MonoBehaviour
         steering = 0f;
         throttle = 0f;
         steerInput = 0f;
+
+        SimpleCameraFollow follow = Camera.main != null ? Camera.main.GetComponent<SimpleCameraFollow>() : null;
+        if (follow != null)
+        {
+            follow.SnapAfterBusReset();
+        }
     }
 
     private void OnCollisionEnter(Collision collision)
@@ -453,20 +471,11 @@ public class SimpleBusController : MonoBehaviour
         }
 
         Debug.Log("Collision detected with: " + collision.gameObject.name);
-
-        Vector3 impulseDirection = -collision.contacts[0].normal;
-        float impactStrength = Mathf.Clamp(collision.relativeVelocity.magnitude, 0f, 20f);
-        if (impactStrength < 1.2f)
-        {
-            return;
-        }
-
-        if (useWheelColliderDrive)
-        {
-            rb.velocity *= 0.74f;
-            rb.angularVelocity *= 0.65f;
-            rb.AddForce(impulseDirection * impactStrength * 1.4f, ForceMode.VelocityChange);
-        }
+        Vector3 localVelocity = transform.InverseTransformDirection(rb.velocity);
+        localVelocity.x = 0f;
+        localVelocity.y = Mathf.Min(localVelocity.y, 0f);
+        rb.velocity = transform.TransformDirection(localVelocity);
+        rb.angularVelocity = Vector3.zero;
     }
 
     private static bool IsKeyHeld(KeyCode key)

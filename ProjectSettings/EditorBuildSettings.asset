@@ -17,4 +17,10 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/GameScene.unity
     guid: 2cda990e2423bbf4892e6590ba056729
+  - enabled: 1
+    path: Assets/Scenes/PickupScene.unity
+    guid: 39b97e98ca1d40e898d7551528fe910d
+  - enabled: 1
+    path: Assets/Scenes/DropOffScene.unity
+    guid: eecab7a07fea46949b996e40f63439c7
   m_configObjects: {}
