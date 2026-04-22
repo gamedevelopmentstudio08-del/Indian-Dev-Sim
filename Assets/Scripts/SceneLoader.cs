@@ -123,6 +123,12 @@ public sealed class SceneLoader : MonoBehaviour
             return;
         }
 
+        BindExistingLoadingUi();
+        if (loadingCanvas != null && progressSlider != null)
+        {
+            return;
+        }
+
         if (loadingCanvas == null)
         {
             GameObject canvasObject = new GameObject("LoadingCanvas");
@@ -142,6 +148,24 @@ public sealed class SceneLoader : MonoBehaviour
         CreateLoadingText(panelObject.transform);
         CreateProgressSlider(panelObject.transform);
         Debug.Log("Loading UI Created");
+    }
+
+    private void BindExistingLoadingUi()
+    {
+        GameObject existingCanvasObj = GameObject.Find("LoadingCanvas");
+        if (existingCanvasObj == null)
+        {
+            return;
+        }
+
+        loadingCanvas = existingCanvasObj.GetComponent<Canvas>();
+        if (loadingCanvas == null)
+        {
+            return;
+        }
+
+        progressSlider = existingCanvasObj.GetComponentInChildren<Slider>(true);
+        progressLabel = existingCanvasObj.GetComponentInChildren<TextMeshProUGUI>(true);
     }
 
     private GameObject CreatePanel(Transform parent)

@@ -1,21 +1,22 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 public sealed class SimpleMenu : MonoBehaviour
 {
-    [SerializeField] private string gameSceneName = "SampleScene";
+    [SerializeField] private string gameSceneName = "RouteSelectionScene";
 
     private void Awake()
     {
-        // Scene-safe wiring (no runtime UI creation): hooks up existing buttons by name.
+        SceneUiHelper.EnsureEventSystem();
         WireButton("PlayButton", PlayGame);
         WireButton("ExitButton", ExitGame);
     }
 
     public void PlayGame()
     {
-        Debug.Log("SimpleMenu: PlayGame()");
-        SceneLoader.LoadSceneAsync(gameSceneName);
+        Debug.Log("Opening Route Selection Scene");
+        SceneManager.LoadScene(gameSceneName);
     }
 
     public void ExitGame()
@@ -42,5 +43,22 @@ public sealed class SimpleMenu : MonoBehaviour
 
         button.onClick.RemoveAllListeners();
         button.onClick.AddListener(handler);
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void AutoCreateInMainMenuScene()
+    {
+        if (SceneManager.GetActiveScene().name != "MainMenuScene")
+        {
+            return;
+        }
+
+        if (FindObjectOfType<SimpleMenu>() != null)
+        {
+            return;
+        }
+
+        GameObject go = new GameObject("SimpleMenu");
+        go.AddComponent<SimpleMenu>();
     }
 }
